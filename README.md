@@ -53,7 +53,7 @@ When you say `$my-skill` or `skill: my-skill`, the agent:
 Clone this repo directly to `~/.agents/skills/`:
 
 ```bash
-git clone https://github.com/USER/ai-skills ~/.agents/skills
+git clone https://github.com/DamianPala/skills-starter ~/.agents/skills
 cd ~/.agents/skills
 ```
 
