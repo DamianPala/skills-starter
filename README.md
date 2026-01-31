@@ -1,4 +1,4 @@
-# ai-skills
+# skills-starter
 
 A template for organizing AI agent skills with a lightweight routing system. Skills let you define reusable behavioral instructions that agents load on-demand, keeping your context window clean until you actually need them.
 
@@ -123,50 +123,6 @@ Load the SKILL.md from the path specified there.
 
 **Codex** — add the same to `~/.codex/AGENTS.md`.
 
-## Creating a Skill
-
-Create a folder with a `SKILL.md` file:
-
-```bash
-mkdir -p ~/.agents/skills/my-skills/my-skill
-```
-
-`SKILL.md` structure:
-
-```markdown
----
-name: my-skill
-description: What this skill does.
----
-
-# My Skill
-
-## When to use
-- Scenario A
-- Scenario B
-
-## Instructions
-Your behavioral rules here.
-```
-
-Then rebuild the router: `python build-router.py`
-
-### Helper directories
-
-Skills can include supporting files in optional subdirectories:
-
-```
-my-skill/
-├── SKILL.md              # main instructions
-├── scripts/              # executable Python/Bash scripts
-├── references/           # text docs loaded via Read tool
-└── assets/               # templates, configs (referenced by path)
-```
-
-- **scripts/** — deterministic operations the agent can execute
-- **references/** — documentation loaded into context when needed
-- **assets/** — files referenced by path, not loaded into context
-
 ## build-router.py
 
 ```bash
@@ -186,9 +142,3 @@ skill: python-app         # alternative
 load skill my-skill       # verbose
 list skills               # show available
 ```
-
-## Notes
-
-- Skill names: short, lowercase, kebab-case (`my-skill`, not `My_Skill`)
-- Router format: `name: path` — one skill per line, no nesting
-- Skills can include supporting files (examples, references) in the same folder

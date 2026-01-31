@@ -1,9 +1,9 @@
-# Generated router (rebuilt by build-router.py)
-_router/
+# Ignore everything by default
+*
 
-# Python
-__pycache__/
-*.py[cod]
-
-# Backup files
-*.bak
+# Whitelist template files
+!.gitignore
+!README.md
+!creating-skills.md
+!build-router.py
+!skill-tutorial-deep-search.md
