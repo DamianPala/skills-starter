@@ -50,11 +50,20 @@ When you say `$my-skill` or `skill: my-skill`, the agent:
 
 ## Installation
 
-Clone this repo directly to `~/.agents/skills/`:
+**Fresh install** (no existing skills):
 
 ```bash
+mkdir -p ~/.agents
 git clone https://github.com/DamianPala/skills-starter ~/.agents/skills
+```
+
+**Already have skills?** Add as remote and pull:
+
+```bash
 cd ~/.agents/skills
+git init
+git remote add starter https://github.com/DamianPala/skills-starter
+git pull starter main
 ```
 
 ### Add skills
