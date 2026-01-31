@@ -1,0 +1,9 @@
+# Generated router (rebuilt by build-router.py)
+_router/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Backup files
+*.bak
