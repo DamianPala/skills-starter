@@ -184,7 +184,15 @@ def check_conflicts(skills: list[Skill]) -> list[Skill]:
 
 def generate_router_content(skills: list[Skill]) -> str:
     """Generate the router SKILL.md content."""
-    lines = ["# Skill Router", ""]
+    lines = [
+        "---",
+        "name: router",
+        'description: "Skill routing table - maps skill names to paths."',
+        "---",
+        "",
+        "# Skill Router",
+        "",
+    ]
 
     for skill in sorted(skills, key=lambda s: s.name):
         # Use ~ shorthand for home directory
