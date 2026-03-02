@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Build the skill router by scanning ~/.agents/skills/ for SKILL.md files."""
+"""Build the skill router and install skills into AI coding agents."""
 # PYTHON_ARGCOMPLETE_OK
 
 import argparse
@@ -21,6 +21,7 @@ ROUTER_FILE = ROUTER_DIR / "SKILL.md"
 
 IGNORED_DIRS = {
     "_router",
+    "_dev",
     ".git",
     "__pycache__",
     "node_modules",
@@ -30,6 +31,19 @@ IGNORED_DIRS = {
 }
 
 HELPER_DIRS = {"scripts", "references", "assets"}
+
+# Agent skills directories (global/personal scope).
+# Auto-detected: only agents with existing config dirs get symlinks.
+AGENT_SKILLS_DIRS: dict[str, Path] = {
+    "claude-code": Path.home() / ".claude" / "skills",
+    "codex": Path.home() / ".codex" / "skills",
+    "cursor": Path.home() / ".cursor" / "skills",
+    "windsurf": Path.home() / ".windsurf" / "skills",
+    "gemini-cli": Path.home() / ".gemini" / "skills",
+    "kiro": Path.home() / ".kiro" / "skills",
+    "opencode": Path.home() / ".config" / "opencode" / "skills",
+    "copilot": Path.home() / ".copilot" / "skills",
+}
 
 log = logging.getLogger(__name__)
 
@@ -242,19 +256,95 @@ def backup_router(router_file: Path) -> Path | None:
     return backup_path
 
 
+def detect_agents() -> dict[str, Path]:
+    """Return agent skills dirs for agents that have a config directory on disk."""
+    found: dict[str, Path] = {}
+    for agent, skills_dir in AGENT_SKILLS_DIRS.items():
+        # Check if the agent's config root exists (parent of skills/)
+        config_root = skills_dir.parent
+        if config_root.is_dir():
+            found[agent] = skills_dir
+    return found
+
+
+def install_skill(skill: Skill, agents: dict[str, Path]) -> int:
+    """Create symlinks for a skill in all detected agent skills directories."""
+    installed = 0
+    for agent, skills_dir in sorted(agents.items()):
+        link = skills_dir / skill.name
+        target = skill.path.resolve()
+
+        if link.is_symlink():
+            if link.resolve() == target:
+                log.info(f"  {agent}: already installed")
+                continue
+            link.unlink()
+
+        if link.exists():
+            log.warning(f"  {agent}: {link} exists and is not a symlink, skipping")
+            continue
+
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+        log.info(f"  {agent}: installed -> {target}")
+        installed += 1
+
+    return installed
+
+
+def uninstall_skill(name: str, agents: dict[str, Path]) -> int:
+    """Remove symlinks for a skill from all detected agent skills directories."""
+    removed = 0
+    for agent, skills_dir in sorted(agents.items()):
+        link = skills_dir / name
+        if link.is_symlink():
+            link.unlink()
+            log.info(f"  {agent}: removed")
+            removed += 1
+        elif link.exists():
+            log.warning(f"  {agent}: {link} is not a symlink, skipping")
+        else:
+            log.debug(f"  {agent}: not installed")
+    return removed
+
+
+def list_installed(agents: dict[str, Path]) -> None:
+    """List skills installed (symlinked) in each detected agent."""
+    for agent, skills_dir in sorted(agents.items()):
+        if not skills_dir.is_dir():
+            continue
+
+        links = sorted(
+            p
+            for p in skills_dir.iterdir()
+            if p.is_symlink() and ((p / "SKILL.md").is_file() or not p.exists())
+        )
+        if not links:
+            continue
+
+        print(f"\n{agent} ({skills_dir}):")
+        for link in links:
+            target = link.resolve()
+            status = "" if link.exists() else " [broken]"
+            print(f"  {link.name} -> {target}{status}")
+
+    print()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Build the skill router by scanning for SKILL.md files.",
+        description="Build the skill router and install skills into AI coding agents.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s                    # Build router with defaults
-  %(prog)s --list             # List all skills with descriptions
-  %(prog)s --dry-run          # Preview without writing
-  %(prog)s --validate         # Check skills without building
-  %(prog)s --backup           # Create backup before overwriting
-  %(prog)s -v                 # Verbose output
-  %(prog)s --skills-dir ~/my-skills  # Use custom directory
+  %(prog)s                          # Build router
+  %(prog)s --list                   # List all available skills
+  %(prog)s --install crypto-research  # Symlink skill into detected agents
+  %(prog)s --uninstall crypto-research
+  %(prog)s --installed              # Show what's installed where
+  %(prog)s --dry-run                # Preview without writing
+  %(prog)s --validate               # Check skills without building
+  %(prog)s -v                       # Verbose output
         """,
     )
     parser.add_argument(
@@ -268,6 +358,21 @@ Examples:
         action="store_true",
         dest="list_skills",
         help="List all skills with descriptions (does not build router)",
+    )
+    parser.add_argument(
+        "--install",
+        metavar="SKILL",
+        help="Install a skill into all detected agents (creates symlinks)",
+    )
+    parser.add_argument(
+        "--uninstall",
+        metavar="SKILL",
+        help="Remove a skill from all detected agents",
+    )
+    parser.add_argument(
+        "--installed",
+        action="store_true",
+        help="List skills installed in each detected agent",
     )
     parser.add_argument(
         "--validate",
@@ -305,6 +410,29 @@ Examples:
     router_dir = skills_dir / "_router"
     router_file = router_dir / "SKILL.md"
 
+    # --installed: list what's symlinked, no scan needed
+    if args.installed:
+        agents = detect_agents()
+        if not agents:
+            log.warning("No agents detected")
+            return 1
+        list_installed(agents)
+        return 0
+
+    # --uninstall: remove symlinks, no scan needed
+    if args.uninstall:
+        agents = detect_agents()
+        if not agents:
+            log.warning("No agents detected")
+            return 1
+        log.info(f"Uninstalling: {args.uninstall}")
+        removed = uninstall_skill(args.uninstall, agents)
+        if removed:
+            log.info(f"Removed from {removed} agent(s)")
+        else:
+            log.warning("Skill was not installed in any agent")
+        return 0
+
     log.info(f"Scanning: {skills_dir}")
 
     skills = scan_skills(skills_dir)
@@ -318,6 +446,27 @@ Examples:
     log.info(f"Found {len(skills)} skill(s)")
     if warning_count:
         log.info(f"Validation: {warning_count} warning(s)")
+
+    # --install: symlink a specific skill into detected agents
+    if args.install:
+        skill_map = {s.name: s for s in skills}
+        if args.install not in skill_map:
+            log.error(
+                f"Skill '{args.install}' not found. Available: {', '.join(sorted(skill_map))}"
+            )
+            return 1
+
+        agents = detect_agents()
+        if not agents:
+            log.warning("No agents detected")
+            return 1
+
+        skill = skill_map[args.install]
+        log.info(f"Installing: {skill.name} ({skill.path})")
+        log.info(f"Detected agents: {', '.join(sorted(agents))}")
+        installed = install_skill(skill, agents)
+        log.info(f"Installed in {installed} agent(s)")
+        return 0
 
     # --list: just print skills and exit
     if args.list_skills:
