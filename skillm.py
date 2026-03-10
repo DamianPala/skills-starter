@@ -109,7 +109,7 @@ def find_skill(dir_path: Path) -> Skill | None:
     )
 
 
-def scan_tree(base: Path, depth: int = 0, max_depth: int = 2) -> list[Skill]:
+def scan_tree(base: Path, depth: int = 0, max_depth: int = 3) -> list[Skill]:
     if depth > max_depth or not base.is_dir():
         return []
     skills: list[Skill] = []
