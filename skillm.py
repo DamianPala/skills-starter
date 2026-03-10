@@ -631,7 +631,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
             if not d.is_dir():
                 continue
             sub = scan_tree(d, max_depth=2)
-            if not sub:
+            if not sub and not find_skill(d):
                 issues.append(
                     f"library entry has no skills: library/{d.name}"
                     f"\n    fix: skillm remove {d.name}"
