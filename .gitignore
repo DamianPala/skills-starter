@@ -5,5 +5,8 @@
 !.gitignore
 !README.md
 !creating-skills.md
-!build-router.py
+!skillm.py
+!tests/
+!tests/**
+tests/__pycache__/
 !skill-tutorial-deep-search.md
