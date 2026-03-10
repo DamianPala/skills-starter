@@ -167,9 +167,7 @@ class TestRepoNameFromUrl:
         assert skillm.repo_name_from_url("https://github.com/user/repo/") == "repo"
 
     def test_trailing_slash_with_git(self):
-        assert (
-            skillm.repo_name_from_url("https://github.com/user/repo.git/") == "repo"
-        )
+        assert skillm.repo_name_from_url("https://github.com/user/repo.git/") == "repo"
 
     def test_bare_name(self):
         assert skillm.repo_name_from_url("repo.git") == "repo"
@@ -250,8 +248,7 @@ class TestScanTree:
         make_skill(sd / "a", name="a", description="skill a")
         make_skill(sd / "b", name="b", description="skill b")
 
-        result: list[skillm.Skill] = []
-        skillm.scan_tree(sd, result)
+        result = skillm.scan_tree(sd)
         assert {s.name for s in result} == {"a", "b"}
 
     def test_finds_nested_skills(self, skills_env):
@@ -261,8 +258,7 @@ class TestScanTree:
         make_skill(pack / "s1", name="s1", description="s1")
         make_skill(pack / "s2", name="s2", description="s2")
 
-        result: list[skillm.Skill] = []
-        skillm.scan_tree(sd, result)
+        result = skillm.scan_tree(sd)
         assert {s.name for s in result} == {"s1", "s2"}
 
     def test_stops_at_skill_md(self, skills_env):
@@ -271,8 +267,7 @@ class TestScanTree:
         parent = make_skill(sd / "parent", name="parent", description="parent")
         make_skill(parent / "child", name="child", description="child")
 
-        result: list[skillm.Skill] = []
-        skillm.scan_tree(sd, result)
+        result = skillm.scan_tree(sd)
         # Only parent found, child not scanned
         assert {s.name for s in result} == {"parent"}
 
@@ -280,8 +275,7 @@ class TestScanTree:
         sd = skills_env["skills_dir"]
         make_skill(sd / ".hidden", name="hidden", description="hidden")
 
-        result: list[skillm.Skill] = []
-        skillm.scan_tree(sd, result)
+        result = skillm.scan_tree(sd)
         assert len(result) == 0
 
     def test_ignores_known_dirs(self, skills_env):
@@ -289,8 +283,7 @@ class TestScanTree:
         for name in ("__pycache__", "node_modules", ".venv", "_router", "_dev"):
             make_skill(sd / name, name=name, description=name)
 
-        result: list[skillm.Skill] = []
-        skillm.scan_tree(sd, result)
+        result = skillm.scan_tree(sd)
         assert len(result) == 0
 
     def test_respects_max_depth(self, skills_env):
@@ -300,18 +293,15 @@ class TestScanTree:
         make_skill(deep, name="deep", description="deep")
 
         # max_depth=2: sd -> l1(0) -> l2(1) -> l3(2) -> SKILL.md found
-        result2: list[skillm.Skill] = []
-        skillm.scan_tree(sd, result2, max_depth=2)
+        result2 = skillm.scan_tree(sd, max_depth=2)
         assert len(result2) == 1
 
         # max_depth=1: sd -> l1(0) -> l2(1) -> stop
-        result1: list[skillm.Skill] = []
-        skillm.scan_tree(sd, result1, max_depth=1)
+        result1 = skillm.scan_tree(sd, max_depth=1)
         assert len(result1) == 0
 
     def test_nonexistent_dir(self):
-        result: list[skillm.Skill] = []
-        skillm.scan_tree(Path("/nonexistent"), result)
+        result = skillm.scan_tree(Path("/nonexistent"))
         assert result == []
 
     def test_sorted_output(self, skills_env):
@@ -319,8 +309,7 @@ class TestScanTree:
         make_skill(sd / "z-skill", name="z-skill", description="z")
         make_skill(sd / "a-skill", name="a-skill", description="a")
 
-        result: list[skillm.Skill] = []
-        skillm.scan_tree(sd, result)
+        result = skillm.scan_tree(sd)
         # scan_tree iterates sorted(base.iterdir()), so dirs are alphabetical
         assert result[0].name == "a-skill"
         assert result[1].name == "z-skill"
@@ -487,7 +476,7 @@ class TestCmdList:
         make_skill(sd / "x", name="x", description="Uses tailwind CSS")
 
         args = argparse.Namespace(command="list", query="tailwind", verbose=False)
-        ret = skillm.cmd_list(args)
+        skillm.cmd_list(args)
         out = capsys.readouterr().out
         assert "x" in out
         assert "Total: 1" in out

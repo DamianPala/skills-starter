@@ -66,6 +66,7 @@ class Skill:
     description: str | None = None
     source: str = "local"
     helpers: list[str] = field(default_factory=list)
+    frontmatter: dict[str, str] = field(default_factory=dict)
 
 
 # --- Core ---
@@ -98,12 +99,20 @@ def find_skill(dir_path: Path) -> Skill | None:
     except ValueError:
         source = "local"
     helpers = sorted(h for h in HELPER_DIRS if (dir_path / h).is_dir())
-    return Skill(name=name, path=dir_path, description=desc, source=source, helpers=helpers)
+    return Skill(
+        name=name,
+        path=dir_path,
+        description=desc,
+        source=source,
+        helpers=helpers,
+        frontmatter=fm,
+    )
 
 
-def scan_tree(base: Path, skills: list[Skill], depth: int = 0, max_depth: int = 2) -> None:
+def scan_tree(base: Path, depth: int = 0, max_depth: int = 2) -> list[Skill]:
     if depth > max_depth or not base.is_dir():
-        return
+        return []
+    skills: list[Skill] = []
     for item in sorted(base.iterdir()):
         if not item.is_dir() or item.name in IGNORED_DIRS or item.name.startswith("."):
             continue
@@ -111,12 +120,12 @@ def scan_tree(base: Path, skills: list[Skill], depth: int = 0, max_depth: int = 
         if skill:
             skills.append(skill)
         else:
-            scan_tree(item, skills, depth + 1, max_depth)
+            skills.extend(scan_tree(item, depth + 1, max_depth))
+    return skills
 
 
 def scan_all() -> list[Skill]:
-    raw: list[Skill] = []
-    scan_tree(SKILLS_DIR, raw)
+    raw = scan_tree(SKILLS_DIR)
     seen: dict[str, Path] = {}
     unique: list[Skill] = []
     for s in raw:
@@ -199,7 +208,8 @@ def cmd_list(args: argparse.Namespace) -> int:
     if args.query:
         q = args.query.lower()
         skills = [
-            s for s in skills
+            s
+            for s in skills
             if q in s.name.lower() or (s.description and q in s.description.lower())
         ]
         if not skills:
@@ -234,8 +244,7 @@ def cmd_info(args: argparse.Namespace) -> int:
     if s.helpers:
         print(f"Helpers:     {', '.join(s.helpers)}")
 
-    fm = parse_frontmatter((s.path / "SKILL.md").read_text(encoding="utf-8"))
-    extra = {k: v for k, v in fm.items() if k not in ("name", "description")}
+    extra = {k: v for k, v in s.frontmatter.items() if k not in ("name", "description")}
     if extra:
         print("\nFrontmatter:")
         for k, v in extra.items():
@@ -412,8 +421,7 @@ def _add_git(url: str, force: bool = False) -> int:
         log.error(f"git clone failed: {result.stderr.strip()}")
         return 1
 
-    skills: list[Skill] = []
-    scan_tree(target, skills, max_depth=2)
+    skills = scan_tree(target, max_depth=2)
     if skills:
         log.info(f"Found {len(skills)} skill(s): {', '.join(s.name for s in skills)}")
     else:
@@ -454,20 +462,20 @@ def cmd_remove(args: argparse.Namespace) -> int:
 
     # Warn if skills from this repo are installed somewhere
     if target.is_dir():
-        repo_skills: list[Skill] = []
-        scan_tree(target, repo_skills, max_depth=2)
+        repo_skills = scan_tree(target, max_depth=2)
+        global_agents = detect_agents(Path.home())
+        root = find_project_root()
+        local_agents = detect_agents(root) if root else {}
         for s in repo_skills:
             resolved = s.path.resolve()
-            for agent, sdir in detect_agents(Path.home()).items():
+            for agent, sdir in global_agents.items():
                 link = sdir / s.name
                 if link.is_symlink() and link.resolve() == resolved:
                     log.warning(f"  '{s.name}' is installed globally in {agent}")
-            root = find_project_root()
-            if root:
-                for agent, sdir in detect_agents(root).items():
-                    link = sdir / s.name
-                    if link.is_symlink() and link.resolve() == resolved:
-                        log.warning(f"  '{s.name}' is installed locally in {agent}")
+            for agent, sdir in local_agents.items():
+                link = sdir / s.name
+                if link.is_symlink() and link.resolve() == resolved:
+                    log.warning(f"  '{s.name}' is installed locally in {agent}")
 
     if not shutil.which("trash-put"):
         log.error("trash-put not found. Install: pip install trash-cli")
@@ -496,7 +504,8 @@ def cmd_update(args: argparse.Namespace) -> int:
             log.info("Library is empty")
             return 0
         dirs = sorted(
-            d for d in LIBRARY_DIR.iterdir()
+            d
+            for d in LIBRARY_DIR.iterdir()
             if d.is_dir() and not d.is_symlink() and (d / ".git").is_dir()
         )
         if not dirs:
@@ -504,8 +513,7 @@ def cmd_update(args: argparse.Namespace) -> int:
             return 0
 
     for d in dirs:
-        before: list[Skill] = []
-        scan_tree(d, before, max_depth=2)
+        before = scan_tree(d, max_depth=2)
         before_names = {s.name for s in before}
 
         log.info(f"Updating {d.name}...")
@@ -521,8 +529,7 @@ def cmd_update(args: argparse.Namespace) -> int:
             log.info(f"  {d.name}: up to date")
             continue
 
-        after: list[Skill] = []
-        scan_tree(d, after, max_depth=2)
+        after = scan_tree(d, max_depth=2)
         after_names = {s.name for s in after}
 
         added = after_names - before_names
@@ -573,8 +580,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     issues: list[str] = []
 
     # 1. Frontmatter checks + duplicates
-    raw: list[Skill] = []
-    scan_tree(SKILLS_DIR, raw)
+    raw = scan_tree(SKILLS_DIR)
     seen_names: dict[str, Path] = {}
     skills: list[Skill] = []
     for s in raw:
@@ -588,8 +594,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         skills.append(s)
 
     for s in skills:
-        fm = parse_frontmatter((s.path / "SKILL.md").read_text(encoding="utf-8"))
-        if not fm.get("name"):
+        if not s.frontmatter.get("name"):
             issues.append(f"missing name in frontmatter: {home_short(s.path)}/SKILL.md")
         if not s.description:
             issues.append(f"missing description: {home_short(s.path)}/SKILL.md")
@@ -625,8 +630,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         for d in sorted(LIBRARY_DIR.iterdir()):
             if not d.is_dir():
                 continue
-            sub: list[Skill] = []
-            scan_tree(d, sub, max_depth=2)
+            sub = scan_tree(d, max_depth=2)
             if not sub:
                 issues.append(
                     f"library entry has no skills: library/{d.name}"
@@ -672,7 +676,9 @@ Infrastructure:
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose output")
     parser.add_argument(
-        "--skills-dir", type=Path, default=None,
+        "--skills-dir",
+        type=Path,
+        default=None,
         help="override SKILLS_DIR (default: ~/.agents/skills)",
     )
 
@@ -688,13 +694,21 @@ Infrastructure:
     # Install / Uninstall
     p_install = sub.add_parser("install", aliases=["i"], help="install skills")
     p_install.add_argument(
-        "-g", "--global", action="store_true", dest="is_global", help="install globally",
+        "-g",
+        "--global",
+        action="store_true",
+        dest="is_global",
+        help="install globally",
     )
     p_install.add_argument("skills", nargs="+", help="skill name(s)")
 
     p_uninstall = sub.add_parser("uninstall", aliases=["un"], help="uninstall skills")
     p_uninstall.add_argument(
-        "-g", "--global", action="store_true", dest="is_global", help="uninstall globally",
+        "-g",
+        "--global",
+        action="store_true",
+        dest="is_global",
+        help="uninstall globally",
     )
     p_uninstall.add_argument("skills", nargs="+", help="skill name(s)")
 
@@ -740,13 +754,18 @@ Infrastructure:
     )
 
     cmds = {
-        "list": cmd_list, "ls": cmd_list,
+        "list": cmd_list,
+        "ls": cmd_list,
         "info": cmd_info,
-        "install": cmd_install, "i": cmd_install,
-        "uninstall": cmd_uninstall, "un": cmd_uninstall,
-        "status": cmd_status, "st": cmd_status,
+        "install": cmd_install,
+        "i": cmd_install,
+        "uninstall": cmd_uninstall,
+        "un": cmd_uninstall,
+        "status": cmd_status,
+        "st": cmd_status,
         "add": cmd_add,
-        "remove": cmd_remove, "rm": cmd_remove,
+        "remove": cmd_remove,
+        "rm": cmd_remove,
         "update": cmd_update,
         "router": cmd_router,
         "doctor": cmd_doctor,
