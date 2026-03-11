@@ -353,13 +353,16 @@ class TestScanTree:
 class TestScanAll:
     def test_deduplicates(self, skills_env):
         sd = skills_env["skills_dir"]
-        make_skill(sd / "pack1" / "dupe", name="dupe", description="first")
-        make_skill(sd / "pack2" / "dupe", name="dupe", description="second")
+        make_skill(sd / "pack1" / "dupe", name="dupe", description="short")
+        # pack2 has a longer SKILL.md so it wins
+        p2 = sd / "pack2" / "dupe"
+        p2.mkdir(parents=True)
+        (p2 / "SKILL.md").write_text('---\nname: dupe\ndescription: "longer"\n---\n' + "A" * 500)
 
         result = skillm.scan_all()
         dupes = [s for s in result if s.name == "dupe"]
         assert len(dupes) == 1
-        assert dupes[0].description == "first"
+        assert dupes[0].description == "longer"
 
     def test_no_duplicates(self, skills_env):
         sd = skills_env["skills_dir"]
@@ -475,7 +478,7 @@ class TestFindProjectRoot:
 
 class TestCmdList:
     def test_empty(self, skills_env, capsys):
-        args = argparse.Namespace(command="list", query=None, verbose=False)
+        args = argparse.Namespace(command="list", query=None, installed=False, verbose=False)
         ret = skillm.cmd_list(args)
         assert ret == 0
         assert "No skills found" in capsys.readouterr().out
@@ -485,7 +488,7 @@ class TestCmdList:
         make_skill(sd / "alpha", name="alpha", description="Alpha skill")
         make_skill(sd / "beta", name="beta", description="Beta skill")
 
-        args = argparse.Namespace(command="list", query=None, verbose=False)
+        args = argparse.Namespace(command="list", query=None, installed=False, verbose=False)
         ret = skillm.cmd_list(args)
         assert ret == 0
         out = capsys.readouterr().out
@@ -493,12 +496,22 @@ class TestCmdList:
         assert "beta" in out
         assert "Total: 2" in out
 
+    def test_no_token_totals(self, skills_env, capsys):
+        sd = skills_env["skills_dir"]
+        make_skill(sd / "alpha", name="alpha", description="Alpha skill")
+
+        args = argparse.Namespace(command="list", query=None, installed=False, verbose=False)
+        skillm.cmd_list(args)
+        out = capsys.readouterr().out
+        assert "idle" not in out.split("Total:")[1]
+        assert "active" not in out.split("Total:")[1]
+
     def test_query_filter_by_name(self, skills_env, capsys):
         sd = skills_env["skills_dir"]
         make_skill(sd / "alpha", name="alpha", description="Alpha skill")
         make_skill(sd / "beta", name="beta", description="Beta skill")
 
-        args = argparse.Namespace(command="list", query="alpha", verbose=False)
+        args = argparse.Namespace(command="list", query="alpha", installed=False, verbose=False)
         ret = skillm.cmd_list(args)
         assert ret == 0
         out = capsys.readouterr().out
@@ -510,7 +523,7 @@ class TestCmdList:
         sd = skills_env["skills_dir"]
         make_skill(sd / "x", name="x", description="Uses tailwind CSS")
 
-        args = argparse.Namespace(command="list", query="tailwind", verbose=False)
+        args = argparse.Namespace(command="list", query="tailwind", installed=False, verbose=False)
         skillm.cmd_list(args)
         out = capsys.readouterr().out
         assert "x" in out
@@ -520,7 +533,7 @@ class TestCmdList:
         sd = skills_env["skills_dir"]
         make_skill(sd / "alpha", name="alpha", description="Alpha skill")
 
-        args = argparse.Namespace(command="list", query="zzz", verbose=False)
+        args = argparse.Namespace(command="list", query="zzz", installed=False, verbose=False)
         ret = skillm.cmd_list(args)
         assert ret == 0
         assert "No skills matching" in capsys.readouterr().out
@@ -529,7 +542,7 @@ class TestCmdList:
         sd = skills_env["skills_dir"]
         make_skill(sd / "x", name="x", description="A" * 100)
 
-        args = argparse.Namespace(command="list", query=None, verbose=False)
+        args = argparse.Namespace(command="list", query=None, installed=False, verbose=False)
         skillm.cmd_list(args)
         out = capsys.readouterr().out
         assert "..." in out
@@ -538,9 +551,139 @@ class TestCmdList:
         sd = skills_env["skills_dir"]
         make_skill(sd / "TailWind", name="TailWind", description="CSS framework")
 
-        args = argparse.Namespace(command="list", query="tailwind", verbose=False)
+        args = argparse.Namespace(command="list", query="tailwind", installed=False, verbose=False)
         skillm.cmd_list(args)
         assert "TailWind" in capsys.readouterr().out
+
+    def test_installed_shows_global(self, skills_env, tmp_path, capsys):
+        sd = skills_env["skills_dir"]
+        skill = make_skill(sd / "my-skill", name="my-skill", description="desc")
+
+        home = tmp_path / "fakehome"
+        global_dir = home / ".claude" / "skills"
+        global_dir.mkdir(parents=True)
+        (global_dir / "my-skill").symlink_to(skill)
+
+        with (
+            patch.object(skillm, "find_project_root", return_value=None),
+            patch("pathlib.Path.home", return_value=home),
+        ):
+            args = argparse.Namespace(command="list", query=None, installed=True, verbose=False)
+            ret = skillm.cmd_list(args)
+
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "Global:" in out
+        assert "my-skill" in out
+
+    def test_installed_shows_local_and_global(self, skills_env, tmp_path, capsys):
+        sd = skills_env["skills_dir"]
+        skill = make_skill(sd / "my-skill", name="my-skill", description="desc")
+
+        project = tmp_path / "proj"
+        local_dir = project / ".claude" / "skills"
+        local_dir.mkdir(parents=True)
+        (local_dir / "my-skill").symlink_to(skill)
+
+        home = tmp_path / "fakehome"
+        global_dir = home / ".claude" / "skills"
+        global_dir.mkdir(parents=True)
+        (global_dir / "my-skill").symlink_to(skill)
+
+        with (
+            patch.object(skillm, "find_project_root", return_value=project),
+            patch("pathlib.Path.home", return_value=home),
+        ):
+            args = argparse.Namespace(command="list", query=None, installed=True, verbose=False)
+            ret = skillm.cmd_list(args)
+
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "Project:" in out
+        assert "claude-code" in out
+        assert "Global:" in out
+
+    def test_installed_broken_symlink(self, skills_env, tmp_path, capsys):
+        project = tmp_path / "proj"
+        link_dir = project / ".claude" / "skills"
+        link_dir.mkdir(parents=True)
+        (link_dir / "broken").symlink_to("/nonexistent")
+
+        home = tmp_path / "fakehome"
+        home.mkdir()
+
+        with (
+            patch.object(skillm, "find_project_root", return_value=project),
+            patch("pathlib.Path.home", return_value=home),
+        ):
+            args = argparse.Namespace(command="list", query=None, installed=True, verbose=False)
+            skillm.cmd_list(args)
+
+        out = capsys.readouterr().out
+        assert "[broken]" in out
+
+
+class TestSkillPriority:
+    def test_owned_beats_library(self, skills_env):
+        sd = skills_env["skills_dir"]
+        lib = skills_env["library_dir"]
+        lib.mkdir(parents=True)
+        owned = make_skill(sd / "x", name="x", description="owned")
+        library = make_skill(lib / "repo" / "x", name="x", description="library")
+        owned_skill = skillm.find_skill(owned)
+        lib_skill = skillm.find_skill(library)
+        assert skillm._skill_priority(owned_skill) < skillm._skill_priority(lib_skill)
+
+    def test_longer_skill_wins_within_library(self, skills_env):
+        lib = skills_env["library_dir"]
+        lib.mkdir(parents=True)
+        short = make_skill(lib / "repo-a" / "x", name="x", description="short")
+        long_path = lib / "repo-b" / "x"
+        long_path.mkdir(parents=True)
+        (long_path / "SKILL.md").write_text("---\nname: x\n---\n" + "A" * 1000)
+        short_skill = skillm.find_skill(short)
+        long_skill = skillm.find_skill(long_path)
+        assert skillm._skill_priority(long_skill) < skillm._skill_priority(short_skill)
+
+
+class TestFindAllByName:
+    def test_finds_all_duplicates(self, skills_env):
+        sd = skills_env["skills_dir"]
+        lib = skills_env["library_dir"]
+        lib.mkdir(parents=True)
+        make_skill(sd / "x", name="x", description="owned")
+        make_skill(lib / "repo-a" / "x", name="x", description="lib-a")
+        make_skill(lib / "repo-b" / "x", name="x", description="lib-b")
+        results = skillm.find_all_by_name("x")
+        assert len(results) == 3
+
+    def test_returns_empty_for_missing(self, skills_env):
+        assert skillm.find_all_by_name("nope") == []
+
+
+class TestScanAllPriority:
+    def test_owned_shadows_library(self, skills_env):
+        sd = skills_env["skills_dir"]
+        lib = skills_env["library_dir"]
+        lib.mkdir(parents=True)
+        make_skill(sd / "x", name="x", description="owned")
+        make_skill(lib / "repo" / "x", name="x", description="library")
+        results = skillm.scan_all()
+        matched = [s for s in results if s.name == "x"]
+        assert len(matched) == 1
+        assert matched[0].source == "local"
+
+    def test_longer_library_skill_wins(self, skills_env):
+        lib = skills_env["library_dir"]
+        lib.mkdir(parents=True)
+        make_skill(lib / "repo-a" / "x", name="x", description="short")
+        long_path = lib / "repo-b" / "x"
+        long_path.mkdir(parents=True)
+        (long_path / "SKILL.md").write_text("---\nname: x\n---\n" + "A" * 1000)
+        results = skillm.scan_all()
+        matched = [s for s in results if s.name == "x"]
+        assert len(matched) == 1
+        assert "repo-b" in str(matched[0].path)
 
 
 class TestCmdInfo:
@@ -561,6 +704,7 @@ class TestCmdInfo:
         assert "desc" in out
         assert "license" in out
         assert "MIT" in out
+        assert "[active]" in out
 
     def test_not_found(self, skills_env):
         args = argparse.Namespace(command="info", skill="nope", verbose=False)
@@ -587,6 +731,82 @@ class TestCmdInfo:
         out = capsys.readouterr().out
         assert "local" in out
 
+    def test_shows_all_duplicates(self, skills_env, capsys):
+        lib = skills_env["library_dir"]
+        lib.mkdir(parents=True)
+        make_skill(lib / "repo-a" / "x", name="x", description="short")
+        long_path = lib / "repo-b" / "x"
+        long_path.mkdir(parents=True)
+        (long_path / "SKILL.md").write_text("---\nname: x\n---\n" + "A" * 1000)
+
+        args = argparse.Namespace(command="info", skill="x", verbose=False)
+        ret = skillm.cmd_info(args)
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "[active]" in out
+        assert "repo-b" in out
+        assert "repo-a" in out
+
+    def test_owned_shown_first(self, skills_env, capsys):
+        sd = skills_env["skills_dir"]
+        lib = skills_env["library_dir"]
+        lib.mkdir(parents=True)
+        make_skill(sd / "x", name="x", description="owned version")
+        make_skill(lib / "repo" / "x", name="x", description="library version")
+
+        args = argparse.Namespace(command="info", skill="x", verbose=False)
+        skillm.cmd_info(args)
+        out = capsys.readouterr().out
+        assert "[active]" in out
+        assert "Also in library" in out
+
+
+class TestResolveSkill:
+    def test_unique_skill_resolves(self, skills_env):
+        sd = skills_env["skills_dir"]
+        make_skill(sd / "x", name="x", description="only one")
+        result = skillm._resolve_skill("x", None)
+        assert result is not None
+        assert result.name == "x"
+
+    def test_not_found(self, skills_env):
+        result = skillm._resolve_skill("nope", None)
+        assert result is None
+
+    def test_ambiguous_returns_none(self, skills_env):
+        lib = skills_env["library_dir"]
+        lib.mkdir(parents=True)
+        make_skill(lib / "repo-a" / "x", name="x", description="a")
+        make_skill(lib / "repo-b" / "x", name="x", description="b")
+        result = skillm._resolve_skill("x", None)
+        assert result is None
+
+    def test_from_repo_disambiguates(self, skills_env):
+        lib = skills_env["library_dir"]
+        lib.mkdir(parents=True)
+        make_skill(lib / "repo-a" / "x", name="x", description="a")
+        make_skill(lib / "repo-b" / "x", name="x", description="b")
+        result = skillm._resolve_skill("x", "repo-b")
+        assert result is not None
+        assert "repo-b" in str(result.path)
+
+    def test_from_repo_wrong_name(self, skills_env):
+        lib = skills_env["library_dir"]
+        lib.mkdir(parents=True)
+        make_skill(lib / "repo-a" / "x", name="x", description="a")
+        result = skillm._resolve_skill("x", "nonexistent-repo")
+        assert result is None
+
+    def test_owned_not_ambiguous_with_library(self, skills_env):
+        sd = skills_env["skills_dir"]
+        lib = skills_env["library_dir"]
+        lib.mkdir(parents=True)
+        make_skill(sd / "x", name="x", description="owned")
+        make_skill(lib / "repo" / "x", name="x", description="lib")
+        # owned + library = 2 matches, still ambiguous
+        result = skillm._resolve_skill("x", None)
+        assert result is None
+
 
 class TestCmdInstall:
     def _make_project(self, tmp_path: Path) -> Path:
@@ -601,7 +821,7 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["my-skill"], is_global=False, verbose=False
+            command="install", skills=["my-skill"], is_global=False, force=False, from_repo=None, verbose=False
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             ret = skillm.cmd_install(args)
@@ -618,7 +838,7 @@ class TestCmdInstall:
         (project / ".codex").mkdir()
 
         args = argparse.Namespace(
-            command="install", skills=["my-skill"], is_global=False, verbose=False
+            command="install", skills=["my-skill"], is_global=False, force=False, from_repo=None, verbose=False
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             ret = skillm.cmd_install(args)
@@ -635,7 +855,7 @@ class TestCmdInstall:
         (home / ".codex").mkdir()
 
         args = argparse.Namespace(
-            command="install", skills=["my-skill"], is_global=True, verbose=False
+            command="install", skills=["my-skill"], is_global=True, force=False, from_repo=None, verbose=False
         )
         with patch("pathlib.Path.home", return_value=home):
             ret = skillm.cmd_install(args)
@@ -648,7 +868,7 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["nope"], is_global=False, verbose=False
+            command="install", skills=["nope"], is_global=False, force=False, from_repo=None, verbose=False
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             ret = skillm.cmd_install(args)
@@ -660,7 +880,7 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["good", "bad"], is_global=False, verbose=False
+            command="install", skills=["good", "bad"], is_global=False, force=False, from_repo=None, verbose=False
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             ret = skillm.cmd_install(args)
@@ -672,7 +892,7 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["bad1", "bad2"], is_global=False, verbose=False
+            command="install", skills=["bad1", "bad2"], is_global=False, force=False, from_repo=None, verbose=False
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             ret = skillm.cmd_install(args)
@@ -684,7 +904,7 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["my-skill"], is_global=False, verbose=False
+            command="install", skills=["my-skill"], is_global=False, force=False, from_repo=None, verbose=False
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             skillm.cmd_install(args)
@@ -695,7 +915,7 @@ class TestCmdInstall:
 
     def test_no_project_root(self, skills_env):
         args = argparse.Namespace(
-            command="install", skills=["x"], is_global=False, verbose=False
+            command="install", skills=["x"], is_global=False, force=False, from_repo=None, verbose=False
         )
         with patch.object(skillm, "find_project_root", return_value=None):
             assert skillm.cmd_install(args) == 1
@@ -709,7 +929,7 @@ class TestCmdInstall:
         # No .claude/ or other agent dirs
 
         args = argparse.Namespace(
-            command="install", skills=["my-skill"], is_global=False, verbose=False
+            command="install", skills=["my-skill"], is_global=False, force=False, from_repo=None, verbose=False
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             ret = skillm.cmd_install(args)
@@ -724,13 +944,127 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["my-skill"], is_global=False, verbose=False
+            command="install", skills=["my-skill"], is_global=False, force=False, from_repo=None, verbose=False
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             skillm.cmd_install(args)
 
         assert (project / ".claude" / "skills").is_dir()
         assert (project / ".claude" / "skills" / "my-skill").is_symlink()
+
+
+    def test_scan_blocks_library_skill(self, skills_env, tmp_path):
+        """Library skill with MEDIUM+ findings is blocked."""
+        lib = skills_env["library_dir"]
+        make_skill(lib / "repo" / "risky", name="risky", description="risky")
+        project = self._make_project(tmp_path)
+
+        args = argparse.Namespace(
+            command="install", skills=["risky"], is_global=False, force=False, from_repo=None, verbose=False
+        )
+        with (
+            patch.object(skillm, "find_project_root", return_value=project),
+            patch.object(skillm, "run_security_scan", return_value=(False, "MEDIUM issue")),
+        ):
+            ret = skillm.cmd_install(args)
+
+        assert ret == 1
+        assert not (project / ".claude" / "skills" / "risky").exists()
+
+    def test_scan_passes_library_skill(self, skills_env, tmp_path):
+        """Library skill passing scan gets installed."""
+        lib = skills_env["library_dir"]
+        make_skill(lib / "repo" / "safe", name="safe", description="safe")
+        project = self._make_project(tmp_path)
+
+        args = argparse.Namespace(
+            command="install", skills=["safe"], is_global=False, force=False, from_repo=None, verbose=False
+        )
+        with (
+            patch.object(skillm, "find_project_root", return_value=project),
+            patch.object(skillm, "run_security_scan", return_value=(True, "")),
+        ):
+            ret = skillm.cmd_install(args)
+
+        assert ret == 0
+        assert (project / ".claude" / "skills" / "safe").is_symlink()
+
+    def test_force_skips_scan(self, skills_env, tmp_path):
+        """--force bypasses security scan."""
+        lib = skills_env["library_dir"]
+        make_skill(lib / "repo" / "risky", name="risky", description="risky")
+        project = self._make_project(tmp_path)
+
+        args = argparse.Namespace(
+            command="install", skills=["risky"], is_global=False, force=True, from_repo=None, verbose=False
+        )
+        with (
+            patch.object(skillm, "find_project_root", return_value=project),
+            patch.object(skillm, "run_security_scan") as mock_scan,
+        ):
+            ret = skillm.cmd_install(args)
+
+        mock_scan.assert_not_called()
+        assert ret == 0
+        assert (project / ".claude" / "skills" / "risky").is_symlink()
+
+    def test_local_skill_not_scanned(self, skills_env, tmp_path):
+        """Local (non-library) skills skip scan."""
+        sd = skills_env["skills_dir"]
+        make_skill(sd / "local-skill", name="local-skill", description="local")
+        project = self._make_project(tmp_path)
+
+        args = argparse.Namespace(
+            command="install", skills=["local-skill"], is_global=False, force=False, from_repo=None, verbose=False
+        )
+        with (
+            patch.object(skillm, "find_project_root", return_value=project),
+            patch.object(skillm, "run_security_scan") as mock_scan,
+        ):
+            ret = skillm.cmd_install(args)
+
+        mock_scan.assert_not_called()
+        assert ret == 0
+        assert (project / ".claude" / "skills" / "local-skill").is_symlink()
+
+    def test_ambiguous_skill_blocked(self, skills_env, tmp_path):
+        """Install fails when skill exists in multiple repos without --from."""
+        lib = skills_env["library_dir"]
+        lib.mkdir(parents=True)
+        make_skill(lib / "repo-a" / "dup", name="dup", description="a")
+        make_skill(lib / "repo-b" / "dup", name="dup", description="b")
+        project = self._make_project(tmp_path)
+
+        args = argparse.Namespace(
+            command="install", skills=["dup"], is_global=False, force=False, from_repo=None, verbose=False
+        )
+        with patch.object(skillm, "find_project_root", return_value=project):
+            ret = skillm.cmd_install(args)
+
+        assert ret == 1
+        assert not (project / ".claude" / "skills" / "dup").exists()
+
+    def test_from_repo_resolves_ambiguity(self, skills_env, tmp_path):
+        """--from REPO picks the right skill from duplicates."""
+        lib = skills_env["library_dir"]
+        lib.mkdir(parents=True)
+        make_skill(lib / "repo-a" / "dup", name="dup", description="a")
+        make_skill(lib / "repo-b" / "dup", name="dup", description="b")
+        project = self._make_project(tmp_path)
+
+        args = argparse.Namespace(
+            command="install", skills=["dup"], is_global=False, force=False, from_repo="repo-b", verbose=False
+        )
+        with (
+            patch.object(skillm, "find_project_root", return_value=project),
+            patch.object(skillm, "run_security_scan", return_value=(True, "")),
+        ):
+            ret = skillm.cmd_install(args)
+
+        assert ret == 0
+        link = project / ".claude" / "skills" / "dup"
+        assert link.is_symlink()
+        assert "repo-b" in str(link.resolve())
 
 
 class TestCmdUninstall:
@@ -823,33 +1157,9 @@ class TestCmdUninstall:
 
 
 class TestCmdStatus:
-    def test_with_local_and_global(self, skills_env, tmp_path, capsys):
-        sd = skills_env["skills_dir"]
-        skill = make_skill(sd / "my-skill", name="my-skill", description="desc")
+    """Status is an alias for 'list --installed'."""
 
-        project = tmp_path / "proj"
-        local_dir = project / ".claude" / "skills"
-        local_dir.mkdir(parents=True)
-        (local_dir / "my-skill").symlink_to(skill)
-
-        home = tmp_path / "fakehome"
-        global_dir = home / ".claude" / "skills"
-        global_dir.mkdir(parents=True)
-        (global_dir / "my-skill").symlink_to(skill)
-
-        with (
-            patch.object(skillm, "find_project_root", return_value=project),
-            patch("pathlib.Path.home", return_value=home),
-        ):
-            ret = skillm.cmd_status(argparse.Namespace(command="status", verbose=False))
-
-        assert ret == 0
-        out = capsys.readouterr().out
-        assert "Project:" in out
-        assert "claude-code" in out
-        assert "Global:" in out
-
-    def test_no_project(self, skills_env, tmp_path, capsys):
+    def test_delegates_to_list_installed(self, skills_env, tmp_path, capsys):
         home = tmp_path / "fakehome"
         home.mkdir()
 
@@ -861,25 +1171,72 @@ class TestCmdStatus:
 
         assert ret == 0
         out = capsys.readouterr().out
-        assert "No project root found" in out
+        assert "Global:" in out
 
-    def test_broken_symlink_shown(self, skills_env, tmp_path, capsys):
-        project = tmp_path / "proj"
-        link_dir = project / ".claude" / "skills"
-        link_dir.mkdir(parents=True)
-        (link_dir / "broken").symlink_to("/nonexistent")
 
-        home = tmp_path / "fakehome"
-        home.mkdir()
+class TestCmdScan:
+    def test_missing_skill_name_and_no_all(self, skills_env):
+        args = argparse.Namespace(
+            command="scan", skill=None, all=False, format="markdown", verbose=False
+        )
+        assert skillm.cmd_scan(args) == 1
 
-        with (
-            patch.object(skillm, "find_project_root", return_value=project),
-            patch("pathlib.Path.home", return_value=home),
-        ):
-            skillm.cmd_status(argparse.Namespace(command="status", verbose=False))
+    def test_skill_not_found(self, skills_env):
+        args = argparse.Namespace(
+            command="scan", skill="nonexistent", all=False, format="markdown", verbose=False
+        )
+        assert skillm.cmd_scan(args) == 1
 
-        out = capsys.readouterr().out
-        assert "[broken]" in out
+    def test_no_uvx(self, skills_env):
+        make_skill(skills_env["skills_dir"] / "s", name="s", description="s")
+        args = argparse.Namespace(
+            command="scan", skill="s", all=False, format="markdown", verbose=False
+        )
+        with patch("shutil.which", return_value=None):
+            assert skillm.cmd_scan(args) == 1
+
+    def test_single_skill_calls_scanner(self, skills_env):
+        sd = skills_env["skills_dir"]
+        make_skill(sd / "my-skill", name="my-skill", description="desc")
+        args = argparse.Namespace(
+            command="scan", skill="my-skill", all=False, format="json", verbose=False
+        )
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            ret = skillm.cmd_scan(args)
+
+        assert ret == 0
+        cmd = mock_run.call_args[0][0]
+        assert "scan" in cmd
+        assert "--format" in cmd
+        assert "json" in cmd
+        assert str(sd / "my-skill") in cmd
+
+    def test_all_calls_scan_all(self, skills_env):
+        args = argparse.Namespace(
+            command="scan", skill=None, all=True, format="markdown", verbose=False
+        )
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            ret = skillm.cmd_scan(args)
+
+        assert ret == 0
+        cmd = mock_run.call_args[0][0]
+        assert "scan-all" in cmd
+        assert "--recursive" in cmd
+
+    def test_verbose_flag(self, skills_env):
+        sd = skills_env["skills_dir"]
+        make_skill(sd / "v", name="v", description="v")
+        args = argparse.Namespace(
+            command="scan", skill="v", all=False, format="markdown", verbose=True
+        )
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            skillm.cmd_scan(args)
+
+        cmd = mock_run.call_args[0][0]
+        assert "--verbose" in cmd
 
 
 class TestCmdRouter:
