@@ -320,7 +320,9 @@ def _print_installed_table(
     total_idle = sum(r[2] for r in rows)
     total_active = sum(r[3] for r in rows)
     print(f"\n{scope}:\n")
-    print(f"  {'SKILL':<{wn}}  {'AGENTS':<{wa}}  {'IDLE_TK':>7}  {'ACTIVE_TK':>9}  SOURCE")
+    print(
+        f"  {'SKILL':<{wn}}  {'AGENTS':<{wa}}  {'IDLE_TK':>7}  {'ACTIVE_TK':>9}  SOURCE"
+    )
     print(f"  {'-' * wn}  {'-' * wa}  {'-' * 7}  {'-' * 9}  {'-' * 40}")
     for name, agents, idle, active, source in rows:
         agents_str = ", ".join(agents)
@@ -370,7 +372,9 @@ def cmd_list(args: argparse.Namespace) -> int:
             return 0
 
     w = max(max(len(s.name) for s in skills), 5)
-    print(f"\n{'SKILL':<{w}}  {'SOURCE':<8}  {'IDLE_TK':>7}  {'ACTIVE_TK':>9}  DESCRIPTION")
+    print(
+        f"\n{'SKILL':<{w}}  {'SOURCE':<8}  {'IDLE_TK':>7}  {'ACTIVE_TK':>9}  DESCRIPTION"
+    )
     print(f"{'-' * w}  {'-' * 8}  {'-' * 7}  {'-' * 9}  {'-' * 44}")
 
     for s in sorted(skills, key=lambda s: s.name):
@@ -410,25 +414,21 @@ def _find_installations(s: Skill) -> list[str]:
     resolved = s.path.resolve()
     installations: list[str] = []
 
+    scopes: list[tuple[str, Path]] = []
     root = find_project_root()
     if root:
-        for agent, sdir in sorted(detect_agents(root).items()):
+        scopes.append(("project", root))
+    scopes.append(("global", Path.home()))
+
+    for scope, base in scopes:
+        for agent, sdir in sorted(detect_agents(base).items()):
             if not sdir.is_dir():
                 continue
             for link in sdir.iterdir():
                 if link.is_symlink() and link.name not in IGNORED_DIRS:
                     if link.resolve() == resolved:
-                        installations.append(f"project/{agent}")
+                        installations.append(f"{scope}/{agent}")
                         break
-
-    for agent, sdir in sorted(detect_agents(Path.home()).items()):
-        if not sdir.is_dir():
-            continue
-        for link in sdir.iterdir():
-            if link.is_symlink() and link.name not in IGNORED_DIRS:
-                if link.resolve() == resolved:
-                    installations.append(f"global/{agent}")
-                    break
 
     return installations
 
@@ -436,10 +436,9 @@ def _find_installations(s: Skill) -> list[str]:
 def _print_skill_detail(s: Skill) -> None:
     idle, active = estimate_tokens(s)
     url = _repo_url(s)
-    origin = None
-    if url:
-        m = re.search(r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?$", url)
-        origin = m.group(1) if m else None
+    repo_origin = library_repo_origin(s)
+    # Only show origin shorthand (owner/repo) on Source line, not full URLs
+    origin = repo_origin if repo_origin and repo_origin != url else None
     installations = _find_installations(s)
     if installations:
         by_scope: dict[str, list[str]] = {}
@@ -449,7 +448,7 @@ def _print_skill_detail(s: Skill) -> None:
         parts = [f"{scope}: {', '.join(agents)}" for scope, agents in by_scope.items()]
         print(f"  Installed:   {' | '.join(parts)}")
     else:
-        print(f"  Installed:   no")
+        print("  Installed:   no")
     print(f"  Source:      {s.source}{f' ({origin})' if origin else ''}")
     if url:
         print(f"  Repo:        {url}")
@@ -556,11 +555,15 @@ def _resolve_skill(name: str, from_repo: str | None) -> Skill | None:
 
     if from_repo:
         filtered = [
-            s for s in all_matches if library_repo_name(s) == from_repo or s.source != "library"
+            s
+            for s in all_matches
+            if library_repo_name(s) == from_repo or s.source != "library"
         ]
         if not filtered:
             repos = [library_repo_name(s) or s.source for s in all_matches]
-            log.error(f"  '{name}' not found in '{from_repo}'. Available in: {', '.join(repos)}")
+            log.error(
+                f"  '{name}' not found in '{from_repo}'. Available in: {', '.join(repos)}"
+            )
             return None
         return sorted(filtered, key=_skill_priority)[0]
 
@@ -926,19 +929,16 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 
     # 1. Frontmatter checks + collect duplicates
     raw = scan_tree(SKILLS_DIR)
-    seen_names: dict[str, Path] = {}
+    seen_names: dict[str, str] = {}  # name -> first repo label
     skills: list[Skill] = []
     for s in raw:
+        repo = library_repo_name(s) or s.source
         if s.name in seen_names:
-            repo = library_repo_name(s) or s.source
             if s.name not in dupes:
-                first_repo = library_repo_name(
-                    next(x for x in raw if x.name == s.name and x.path == seen_names[s.name])
-                )
-                dupes[s.name] = [first_repo or "local"]
+                dupes[s.name] = [seen_names[s.name]]
             dupes[s.name].append(repo)
             continue
-        seen_names[s.name] = s.path
+        seen_names[s.name] = repo
         skills.append(s)
 
     for s in skills:
@@ -949,28 +949,20 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
             repo = library_repo_name(s) or s.source
             issues.append(f"missing description: {s.name} ({repo})")
 
-    # 2. Broken symlinks in global agent dirs
-    for agent, sdir in sorted(detect_agents(Path.home()).items()):
-        if not sdir.is_dir():
-            continue
-        for link in sorted(sdir.iterdir()):
-            if link.is_symlink() and not link.exists():
-                issues.append(
-                    f"broken symlink: global/{agent}/{link.name}"
-                    f"  fix: skillm uninstall -g {link.name}"
-                )
-
-    # 3. Broken symlinks in project
+    # 2. Broken symlinks in all scopes
+    scopes: list[tuple[str, Path, str]] = [("global", Path.home(), " -g")]
     root = find_project_root()
     if root:
-        for agent, sdir in sorted(detect_agents(root).items()):
+        scopes.append(("project", root, ""))
+    for scope, base, flag in scopes:
+        for agent, sdir in sorted(detect_agents(base).items()):
             if not sdir.is_dir():
                 continue
             for link in sorted(sdir.iterdir()):
                 if link.is_symlink() and not link.exists():
                     issues.append(
-                        f"broken symlink: project/{agent}/{link.name}"
-                        f"  fix: skillm uninstall {link.name}"
+                        f"broken symlink: {scope}/{agent}/{link.name}"
+                        f"  fix: skillm uninstall{flag} {link.name}"
                     )
 
     # 4. Library dirs with no skills
@@ -981,8 +973,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
             sub = scan_tree(d, max_depth=2)
             if not sub and not find_skill(d):
                 issues.append(
-                    f"empty library repo: {d.name}"
-                    f"  fix: skillm remove {d.name}"
+                    f"empty library repo: {d.name}  fix: skillm remove {d.name}"
                 )
 
     # Report
@@ -1052,7 +1043,9 @@ Infrastructure:
 
     p_info = sub.add_parser("info", help="show skill details")
     p_info.add_argument("skill", help="skill name")
-    p_info.add_argument("--from", dest="from_repo", help="show specific library repo version")
+    p_info.add_argument(
+        "--from", dest="from_repo", help="show specific library repo version"
+    )
 
     # Install / Uninstall
     p_install = sub.add_parser("install", aliases=["i"], help="install skills")
