@@ -1,21 +1,22 @@
 # skills-starter
 
-A template for organizing AI agent skills with a routing system and native agent integration. Skills let you define reusable behavioral instructions that agents load on-demand, keeping your context window clean until you actually need them.
+A template for organizing AI agent skills with a CLI manager, routing system, and native agent integration. Skills are reusable behavioral instructions that agents load on-demand, keeping your context window clean until you actually need them.
 
 Tested with Claude Code and Codex.
 
 ## What are Skills?
 
-Skills are markdown files (`SKILL.md`) with instructions that shape how an AI agent handles specific tasks — writing styles, coding guidelines, domain workflows. You invoke them by name, and the agent applies those rules to the current conversation.
+Skills are markdown files (`SKILL.md`) with instructions that shape how an AI agent handles specific tasks: writing styles, coding guidelines, domain workflows. You invoke them by name, and the agent applies those rules to the current conversation.
 
 ## Features
 
-- **Single location** — all skills in `~/.agents/skills/`, accessible from any project
-- **Native agent install** — `--install` symlinks skills into agent directories (Claude Code, Codex, Cursor, etc.) for native discovery, `/skill-name` invocation, and auto-triggering
+- **`skillm` CLI** — list, install, uninstall, scan, and manage skills from the terminal
+- **Library system** — add community repos, clone skill collections, deduplicate across sources
+- **Native agent install** — symlinks skills into agent directories for native discovery and auto-triggering
 - **Router fallback** — `_router/SKILL.md` routing table for agents without native skill directories
 - **Agent auto-detection** — only installs into agents you actually have installed
-- **Flexible structure** — add single skills or clone entire repos as subfolders (private, company, community)
-- **Compatible with [skills.sh](https://skills.sh)** — install community skills via `npx skills add`
+- **Security scanning** — scan skills for prompt injection, data exfiltration, and other risks before installing
+- **Compatible with [skills.sh](https://skills.sh)** — add community skills via `skillm add --npx <package>`
 - **Plain markdown** — no build step; edit `.md` files directly
 
 ## How It Works
@@ -26,35 +27,37 @@ Two modes, use either or both:
 
 ```
 ~/.agents/skills/my-repo/my-skill/    # source (single location)
-         ↓ symlink
+         symlink
 ~/.claude/skills/my-skill/            # Claude Code picks it up natively
 ~/.codex/skills/my-skill/             # Codex picks it up natively
 ```
 
 Skills appear in `/skill-name` menu, auto-trigger based on description, and support all native features (frontmatter, `context: fork`, etc.).
 
-**Router** (fallback for agents without native skill directories):
+**Router** (lazy-loading) — skills are loaded on-demand via trigger syntax, so they don't consume context until invoked:
 
 ```
-~/.claude/CLAUDE.md           # trigger instructions (points to router)
-         ↓
-~/.agents/skills/_router/     # routing table: skill-name → path
-         ↓
-~/.agents/skills/<folder>/    # actual SKILL.md files
+user: "$my-skill" or "skill: my-skill"
+         |
+~/.agents/skills/_router/     # routing table: skill-name -> path
+         |
+~/.agents/skills/<folder>/    # actual SKILL.md loaded into context
 ```
 
 ## Directory Structure
 
 ```
 ~/.agents/skills/
+├── skillm.py                 # CLI manager
 ├── _router/
-│   └── SKILL.md              # routing table
-├── karpathy-guidelines/
-│   └── SKILL.md
-├── personal-skills/
+│   └── SKILL.md              # routing table (auto-generated)
+├── library/                  # cloned skill repos (via skillm add)
+│   ├── anthropics-skills/
+│   └── vercel-labs-agent-skills/
+├── my-skills/                # your own skills
 │   └── technical-blog/
 │       └── SKILL.md
-└── company-skills/
+└── company-skills/           # team/company skills
     └── python-app/
         └── SKILL.md
 ```
@@ -79,29 +82,42 @@ git pull starter main
 
 ### Add skills
 
-Add your skills before building the router:
-
 ```bash
 # Create your own
 mkdir -p my-skills/my-skill
 # edit my-skills/my-skill/SKILL.md
 
-# Clone other skill repos
-git clone <repo> company-skills
+# Add a community repo to the library
+skillm add owner/repo
+skillm add https://github.com/someone/skills.git
 
-# Or install from skills.sh
-npx skills add <package>
+# Or add from skills.sh
+skillm add --npx <package>
 ```
 
-### Build the router
+### Install skills into agents
 
 ```bash
-python build-router.py
+skillm install my-skill            # install into all detected agents (project scope)
+skillm install -g my-skill         # install globally
+skillm install --from repo my-skill  # pick specific repo when name exists in multiple
+skillm uninstall my-skill          # remove from agents
 ```
 
-The script scans all subfolders for `SKILL.md` files and generates `_router/SKILL.md`.
+Auto-detects which agents are present on your system:
 
-Run this again whenever you add or remove skills.
+| Agent | Skills directory |
+|-------|-----------------|
+| Claude Code | `~/.claude/skills/` |
+| Codex | `~/.codex/skills/` |
+| Cursor | `~/.cursor/skills/` |
+| Windsurf | `~/.windsurf/skills/` |
+| Gemini CLI | `~/.gemini/skills/` |
+| Kiro | `~/.kiro/skills/` |
+| OpenCode | `~/.config/opencode/skills/` |
+| Copilot | `~/.copilot/skills/` |
+
+Only agents with an existing config directory get symlinks. Install is idempotent.
 
 ## Configuration
 
@@ -143,48 +159,37 @@ Load the SKILL.md from the path specified there.
 
 **Codex** — add the same to `~/.codex/AGENTS.md`.
 
-## build-router.py
-
-### Install skills into agents
+## skillm CLI
 
 ```bash
-python build-router.py --install crypto-research    # symlink into all detected agents
-python build-router.py --uninstall crypto-research  # remove from all agents
-python build-router.py --installed                  # show what's installed where
-```
+# Discovery
+skillm list                    # list all available skills
+skillm list --installed        # show installed skills with token counts
+skillm list react              # filter by name or description
+skillm info my-skill           # show skill details
+skillm info my-skill --from repo  # show specific repo version
 
-Auto-detects which agents are present on your system:
+# Library
+skillm add owner/repo          # clone skill repo into library
+skillm add --npx package       # add from skills.sh
+skillm remove repo-name        # remove from library
+skillm update                  # git pull all library repos
 
-| Agent | Skills directory |
-|-------|-----------------|
-| Claude Code | `~/.claude/skills/` |
-| Codex | `~/.codex/skills/` |
-| Cursor | `~/.cursor/skills/` |
-| Windsurf | `~/.windsurf/skills/` |
-| Gemini CLI | `~/.gemini/skills/` |
-| Kiro | `~/.kiro/skills/` |
-| OpenCode | `~/.config/opencode/skills/` |
-| Copilot | `~/.copilot/skills/` |
+# Security
+skillm scan my-skill           # scan for security issues
+skillm scan --all              # scan everything
 
-Only agents with an existing config directory get symlinks. Install is idempotent.
-
-### Router and other commands
-
-```bash
-python build-router.py              # build router
-python build-router.py --list       # list all available skills
-python build-router.py --validate   # check skills without building
-python build-router.py --dry-run    # preview router content
-python build-router.py --backup     # backup before overwriting
-python build-router.py -v           # verbose output
+# Infrastructure
+skillm router                  # rebuild the routing table
+skillm doctor                  # diagnose broken symlinks, missing frontmatter, etc.
 ```
 
 ## Usage
 
-After `--install`, skills work natively in each agent:
+After install, skills work natively in each agent:
 
 ```
-/crypto-research          # slash command (Claude Code, Codex)
+/my-skill                 # slash command (Claude Code, Codex)
 ```
 
 With the router (fallback):
@@ -195,3 +200,7 @@ skill: python-app         # alternative
 load skill my-skill       # verbose
 list skills               # show available
 ```
+
+## Creating Skills
+
+See [creating-skills.md](creating-skills.md) for a guide on writing effective skills.

@@ -3,10 +3,11 @@
 
 # Whitelist template files
 !.gitignore
+!AGENTS.md
+!CLAUDE.md
 !README.md
 !creating-skills.md
 !skillm.py
 !tests/
 !tests/**
 tests/__pycache__/
-!skill-tutorial-deep-search.md
