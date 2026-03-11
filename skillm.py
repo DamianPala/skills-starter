@@ -374,18 +374,17 @@ def cmd_status(_args: argparse.Namespace) -> int:
                 continue
             any_local = True
             agent_idle, agent_active = 0, 0
-            print(f"\n  {agent}:")
             for link in links:
-                broken = " [broken]" if not link.exists() else ""
-                extra = ""
                 if link.exists():
                     skill = find_skill(link.resolve())
                     if skill:
                         idle, active = estimate_tokens(skill)
                         agent_idle += idle
                         agent_active += active
-                print(f"    {link.name} -> {home_short(link.resolve())}{broken}{extra}")
-            print(f"    --- ~{agent_idle} idle / ~{agent_active} active tokens")
+            print(f"\n  {agent} (~{agent_idle} idle / ~{agent_active} active tokens):")
+            for link in links:
+                broken = " [broken]" if not link.exists() else ""
+                print(f"    {link.name} -> {home_short(link.resolve())}{broken}")
         if not any_local:
             print("  No skills installed locally.")
     else:
@@ -402,17 +401,19 @@ def cmd_status(_args: argparse.Namespace) -> int:
             continue
         any_global = True
         agent_idle, agent_active = 0, 0
-        print(f"\n  {agent} ({len(links)} skills):")
         for link in links:
-            broken = " [broken]" if not link.exists() else ""
             if link.exists():
                 skill = find_skill(link.resolve())
                 if skill:
                     idle, active = estimate_tokens(skill)
                     agent_idle += idle
                     agent_active += active
+        print(
+            f"\n  {agent} ({len(links)} skills, ~{agent_idle} idle / ~{agent_active} active tokens):"
+        )
+        for link in links:
+            broken = " [broken]" if not link.exists() else ""
             print(f"    {link.name}{broken}")
-        print(f"    --- ~{agent_idle} idle / ~{agent_active} active tokens")
 
     if not any_global:
         print("  No skills installed globally.")
