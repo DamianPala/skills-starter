@@ -40,6 +40,7 @@ IGNORED_DIRS = {
 }
 
 HELPER_DIRS = {"scripts", "references", "assets"}
+CHARS_PER_TOKEN = 4  # rough estimate for English text
 
 # Relative paths from a base dir (home for global, project root for local).
 AGENT_CONFIGS: dict[str, Path] = {
@@ -189,6 +190,26 @@ def classify_source(source: str) -> tuple[str, str]:
     return "local", source
 
 
+def estimate_tokens(skill: Skill) -> tuple[int, int]:
+    """Return (idle_tokens, active_tokens) for a skill.
+
+    idle = frontmatter fields loaded on session start (name, description, triggers).
+    active = full SKILL.md content loaded when skill is activated.
+    """
+    skill_file = skill.path / "SKILL.md"
+    if not skill_file.is_file():
+        return 0, 0
+    content = skill_file.read_text(encoding="utf-8")
+    active = len(content) // CHARS_PER_TOKEN
+    # Idle cost: reconstruct what agents see on startup (name + description + triggers)
+    fm = skill.frontmatter
+    idle_parts = [f"- {fm.get('name', skill.name)}"]
+    if fm.get("description"):
+        idle_parts.append(fm["description"])
+    idle = sum(len(p) for p in idle_parts) // CHARS_PER_TOKEN
+    return idle, active
+
+
 def repo_name_from_url(url: str) -> str:
     name = url.rstrip("/").rsplit("/", 1)[-1]
     if name.endswith(".git"):
@@ -217,16 +238,23 @@ def cmd_list(args: argparse.Namespace) -> int:
             return 0
 
     w = max(max(len(s.name) for s in skills), 5)
-    print(f"\n{'SKILL':<{w}}  {'SOURCE':<8}  DESCRIPTION")
-    print(f"{'-' * w}  {'-' * 8}  {'-' * 50}")
+    print(f"\n{'SKILL':<{w}}  {'SOURCE':<8}  {'IDLE':>5}  {'ACTIVE':>6}  DESCRIPTION")
+    print(f"{'-' * w}  {'-' * 8}  {'-' * 5}  {'-' * 6}  {'-' * 44}")
 
+    total_idle = 0
+    total_active = 0
     for s in sorted(skills, key=lambda s: s.name):
         desc = s.description or "(no description)"
-        if len(desc) > 55:
-            desc = desc[:52] + "..."
-        print(f"{s.name:<{w}}  {s.source:<8}  {desc}")
+        if len(desc) > 48:
+            desc = desc[:45] + "..."
+        idle, active = estimate_tokens(s)
+        total_idle += idle
+        total_active += active
+        print(f"{s.name:<{w}}  {s.source:<8}  {idle:>5}  {active:>6}  {desc}")
 
-    print(f"\nTotal: {len(skills)} skill(s)")
+    print(
+        f"\nTotal: {len(skills)} skill(s), ~{total_idle} idle / ~{total_active} active tokens"
+    )
     return 0
 
 
@@ -237,10 +265,12 @@ def cmd_info(args: argparse.Namespace) -> int:
         return 1
 
     s = skill_map[args.skill]
+    idle, active = estimate_tokens(s)
     print(f"\nName:        {s.name}")
     print(f"Path:        {home_short(s.path)}")
     print(f"Source:      {s.source}")
     print(f"Description: {s.description or '(none)'}")
+    print(f"Tokens:      ~{idle} idle / ~{active} active")
     if s.helpers:
         print(f"Helpers:     {', '.join(s.helpers)}")
 
@@ -343,10 +373,19 @@ def cmd_status(_args: argparse.Namespace) -> int:
             if not links:
                 continue
             any_local = True
+            agent_idle, agent_active = 0, 0
             print(f"\n  {agent}:")
             for link in links:
                 broken = " [broken]" if not link.exists() else ""
-                print(f"    {link.name} -> {home_short(link.resolve())}{broken}")
+                extra = ""
+                if link.exists():
+                    skill = find_skill(link.resolve())
+                    if skill:
+                        idle, active = estimate_tokens(skill)
+                        agent_idle += idle
+                        agent_active += active
+                print(f"    {link.name} -> {home_short(link.resolve())}{broken}{extra}")
+            print(f"    --- ~{agent_idle} idle / ~{agent_active} active tokens")
         if not any_local:
             print("  No skills installed locally.")
     else:
@@ -362,10 +401,18 @@ def cmd_status(_args: argparse.Namespace) -> int:
         if not links:
             continue
         any_global = True
+        agent_idle, agent_active = 0, 0
         print(f"\n  {agent} ({len(links)} skills):")
         for link in links:
             broken = " [broken]" if not link.exists() else ""
+            if link.exists():
+                skill = find_skill(link.resolve())
+                if skill:
+                    idle, active = estimate_tokens(skill)
+                    agent_idle += idle
+                    agent_active += active
             print(f"    {link.name}{broken}")
+        print(f"    --- ~{agent_idle} idle / ~{agent_active} active tokens")
 
     if not any_global:
         print("  No skills installed globally.")
