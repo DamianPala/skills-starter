@@ -188,6 +188,41 @@ class TestHomeShort:
 # ============================================================
 
 
+class TestEstimateTokens:
+    def test_basic(self, tmp_path, skills_env):
+        skill_dir = make_skill(
+            tmp_path / "t", name="test-skill", description="A short description"
+        )
+        s = skillm.find_skill(skill_dir)
+        assert s is not None
+        idle, active = skillm.estimate_tokens(s)
+        assert idle > 0
+        assert active > idle
+
+    def test_no_skill_md(self, tmp_path):
+        d = tmp_path / "empty"
+        d.mkdir()
+        s = skillm.Skill(name="empty", path=d)
+        idle, active = skillm.estimate_tokens(s)
+        assert idle == 0
+        assert active == 0
+
+    def test_longer_content_more_tokens(self, tmp_path, skills_env):
+        short = make_skill(tmp_path / "short", name="short", description="x")
+        long_dir = tmp_path / "long"
+        long_dir.mkdir()
+        (long_dir / "SKILL.md").write_text(
+            f"---\nname: long\ndescription: {'a' * 200}\n---\n{'content ' * 500}",
+            encoding="utf-8",
+        )
+        s_short = skillm.find_skill(short)
+        s_long = skillm.find_skill(long_dir)
+        assert s_short is not None and s_long is not None
+        _, active_short = skillm.estimate_tokens(s_short)
+        _, active_long = skillm.estimate_tokens(s_long)
+        assert active_long > active_short
+
+
 class TestFindSkill:
     def test_with_full_frontmatter(self, tmp_path, skills_env):
         skill_dir = make_skill(
