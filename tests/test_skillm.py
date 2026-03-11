@@ -573,7 +573,8 @@ class TestCmdList:
 
         assert ret == 0
         out = capsys.readouterr().out
-        assert "Global:" in out
+        assert "Global" in out
+        assert "claude-code" in out
         assert "my-skill" in out
 
     def test_installed_shows_local_and_global(self, skills_env, tmp_path, capsys):
@@ -599,9 +600,9 @@ class TestCmdList:
 
         assert ret == 0
         out = capsys.readouterr().out
-        assert "Project:" in out
+        assert "Project" in out
         assert "claude-code" in out
-        assert "Global:" in out
+        assert "Global" in out
 
     def test_installed_broken_symlink(self, skills_env, tmp_path, capsys):
         project = tmp_path / "proj"
@@ -696,7 +697,7 @@ class TestCmdInfo:
             extras={"license": "MIT"},
         )
 
-        args = argparse.Namespace(command="info", skill="my-skill", verbose=False)
+        args = argparse.Namespace(command="info", skill="my-skill", from_repo=None, verbose=False)
         ret = skillm.cmd_info(args)
         assert ret == 0
         out = capsys.readouterr().out
@@ -704,10 +705,10 @@ class TestCmdInfo:
         assert "desc" in out
         assert "license" in out
         assert "MIT" in out
-        assert "[active]" in out
+        assert "Installed:" in out
 
     def test_not_found(self, skills_env):
-        args = argparse.Namespace(command="info", skill="nope", verbose=False)
+        args = argparse.Namespace(command="info", skill="nope", from_repo=None, verbose=False)
         assert skillm.cmd_info(args) == 1
 
     def test_with_helpers(self, skills_env, capsys):
@@ -716,7 +717,7 @@ class TestCmdInfo:
         (s / "scripts").mkdir()
         (s / "assets").mkdir()
 
-        args = argparse.Namespace(command="info", skill="h", verbose=False)
+        args = argparse.Namespace(command="info", skill="h", from_repo=None, verbose=False)
         skillm.cmd_info(args)
         out = capsys.readouterr().out
         assert "assets" in out
@@ -726,7 +727,7 @@ class TestCmdInfo:
         sd = skills_env["skills_dir"]
         make_skill(sd / "loc", name="loc", description="local skill")
 
-        args = argparse.Namespace(command="info", skill="loc", verbose=False)
+        args = argparse.Namespace(command="info", skill="loc", from_repo=None, verbose=False)
         skillm.cmd_info(args)
         out = capsys.readouterr().out
         assert "local" in out
@@ -739,11 +740,11 @@ class TestCmdInfo:
         long_path.mkdir(parents=True)
         (long_path / "SKILL.md").write_text("---\nname: x\n---\n" + "A" * 1000)
 
-        args = argparse.Namespace(command="info", skill="x", verbose=False)
+        args = argparse.Namespace(command="info", skill="x", from_repo=None, verbose=False)
         ret = skillm.cmd_info(args)
         assert ret == 0
         out = capsys.readouterr().out
-        assert "[active]" in out
+        assert "Installed:" in out
         assert "repo-b" in out
         assert "repo-a" in out
 
@@ -754,11 +755,34 @@ class TestCmdInfo:
         make_skill(sd / "x", name="x", description="owned version")
         make_skill(lib / "repo" / "x", name="x", description="library version")
 
-        args = argparse.Namespace(command="info", skill="x", verbose=False)
+        args = argparse.Namespace(command="info", skill="x", from_repo=None, verbose=False)
         skillm.cmd_info(args)
         out = capsys.readouterr().out
-        assert "[active]" in out
-        assert "Also in library" in out
+        assert "Installed:" in out
+        assert "Also available" in out
+
+
+    def test_from_repo_shows_specific(self, skills_env, capsys):
+        lib = skills_env["library_dir"]
+        lib.mkdir(parents=True)
+        make_skill(lib / "repo-a" / "x", name="x", description="version A")
+        make_skill(lib / "repo-b" / "x", name="x", description="version B")
+
+        args = argparse.Namespace(command="info", skill="x", from_repo="repo-a", verbose=False)
+        ret = skillm.cmd_info(args)
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "[repo-a]" in out
+        assert "version A" in out
+        assert "repo-b" not in out
+
+    def test_from_repo_not_found(self, skills_env):
+        lib = skills_env["library_dir"]
+        lib.mkdir(parents=True)
+        make_skill(lib / "repo-a" / "x", name="x", description="version A")
+
+        args = argparse.Namespace(command="info", skill="x", from_repo="nope", verbose=False)
+        assert skillm.cmd_info(args) == 1
 
 
 class TestResolveSkill:
@@ -1171,7 +1195,7 @@ class TestCmdStatus:
 
         assert ret == 0
         out = capsys.readouterr().out
-        assert "Global:" in out
+        assert "No skills installed globally" in out
 
 
 class TestCmdScan:
@@ -1325,14 +1349,17 @@ class TestCmdDoctor:
         assert ret == 1
         assert "missing name" in capsys.readouterr().out
 
-    def test_duplicate_names(self, skills_env, capsys):
+    def test_duplicate_names_are_notes_not_issues(self, skills_env, capsys):
         sd = skills_env["skills_dir"]
         make_skill(sd / "pack1" / "dupe", name="dupe", description="first")
         make_skill(sd / "pack2" / "dupe", name="dupe", description="second")
 
         ret = self._run_doctor(skills_env)
-        assert ret == 1
-        assert "duplicate" in capsys.readouterr().out
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "Duplicates" in out
+        assert "dupe" in out
+        assert "No issues found" in out
 
     def test_broken_global_symlink(self, skills_env, capsys):
         home = skills_env["root"] / "fakehome"
@@ -1343,7 +1370,8 @@ class TestCmdDoctor:
         ret = self._run_doctor(skills_env, home=home)
         assert ret == 1
         out = capsys.readouterr().out
-        assert "broken global symlink" in out
+        assert "broken symlink" in out
+        assert "global" in out
         assert "skillm uninstall -g broken" in out
 
     def test_broken_local_symlink(self, skills_env, capsys):
@@ -1355,7 +1383,8 @@ class TestCmdDoctor:
         ret = self._run_doctor(skills_env, project=project)
         assert ret == 1
         out = capsys.readouterr().out
-        assert "broken local symlink" in out
+        assert "broken symlink" in out
+        assert "project" in out
         assert "skillm uninstall broken" in out
 
     def test_empty_library_entry(self, skills_env, capsys):
@@ -1365,7 +1394,7 @@ class TestCmdDoctor:
         ret = self._run_doctor(skills_env)
         assert ret == 1
         out = capsys.readouterr().out
-        assert "library entry has no skills" in out
+        assert "empty library repo" in out
         assert "skillm remove empty-repo" in out
 
     def test_multiple_issues(self, skills_env, capsys):

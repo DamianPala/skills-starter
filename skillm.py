@@ -149,7 +149,7 @@ def scan_all() -> list[Skill]:
         copies.sort(key=_skill_priority)
         unique.append(copies[0])
         for dup in copies[1:]:
-            log.warning(f"Duplicate '{name}' at {dup.path}, shadowed by {copies[0].path}")
+            log.debug(f"Duplicate '{name}' at {dup.path}, shadowed by {copies[0].path}")
     return unique
 
 
@@ -217,6 +217,22 @@ def home_short(p: Path) -> str:
     return str(p).replace(str(Path.home()), "~")
 
 
+def _short_path(p: Path) -> str:
+    """Shorten path to first 2 segments + ... + last segment."""
+    short = home_short(p)
+    parts = short.split("/")
+    if len(parts) <= 4:
+        return short
+    return "/".join(parts[:3]) + "/.../" + parts[-1]
+
+
+def _link(p: Path) -> str:
+    """Return OSC 8 clickable file link with shortened display text."""
+    full = str(p.resolve())
+    display = _short_path(p)
+    return f"\033]8;;file://{full}\033\\{display}\033]8;;\033\\"
+
+
 def classify_source(source: str) -> tuple[str, str]:
     """Classify add source as git URL, GitHub shorthand, or local path."""
     if "://" in source or source.endswith(".git"):
@@ -258,65 +274,76 @@ def repo_name_from_url(url: str) -> str:
 # --- Commands: Discovery ---
 
 
+def _collect_installed_rows(
+    base: Path,
+) -> list[tuple[str, list[str], int, int, str]]:
+    """Collect installed skills with their agents, merged into unique rows.
+
+    Returns [(skill_name, [agents], idle, active, source_path)]
+    """
+    # skill_name -> (agents, idle, active, source)
+    merged: dict[str, tuple[list[str], int, int, str]] = {}
+    for agent, sdir in sorted(detect_agents(base).items()):
+        if not sdir.is_dir():
+            continue
+        links = sorted(
+            p for p in sdir.iterdir() if p.is_symlink() and p.name not in IGNORED_DIRS
+        )
+        for link in links:
+            name = link.name
+            if link.exists():
+                skill = find_skill(link.resolve())
+                if skill:
+                    idle, active = estimate_tokens(skill)
+                    source = _link(link.resolve())
+                else:
+                    idle, active, source = 0, 0, _link(link.resolve())
+            else:
+                name = f"{link.name} [broken]"
+                idle, active, source = 0, 0, "?"
+            if name in merged:
+                merged[name][0].append(agent)
+            else:
+                merged[name] = ([agent], idle, active, source)
+    return [(name, *data) for name, data in sorted(merged.items())]
+
+
+def _print_installed_table(
+    scope: str, rows: list[tuple[str, list[str], int, int, str]]
+) -> bool:
+    """Print installed skills table for a scope. Returns True if any skills found."""
+    if not rows:
+        return False
+    wn = max(len(r[0]) for r in rows)
+    wa = max(len(", ".join(r[1])) for r in rows)
+    wa = max(wa, 6)  # min width for AGENTS header
+    total_idle = sum(r[2] for r in rows)
+    total_active = sum(r[3] for r in rows)
+    print(f"\n{scope}:\n")
+    print(f"  {'SKILL':<{wn}}  {'AGENTS':<{wa}}  {'IDLE_TK':>7}  {'ACTIVE_TK':>9}  SOURCE")
+    print(f"  {'-' * wn}  {'-' * wa}  {'-' * 7}  {'-' * 9}  {'-' * 40}")
+    for name, agents, idle, active, source in rows:
+        agents_str = ", ".join(agents)
+        print(f"  {name:<{wn}}  {agents_str:<{wa}}  {idle:>7}  {active:>9}  {source}")
+    print(f"\n  {len(rows)} skills, ~{total_idle} idle / ~{total_active} active tokens")
+    return True
+
+
 def _list_installed() -> int:
     """Show installed skills grouped by scope and agent."""
     root = find_project_root()
 
     if root:
         print(f"\nProject: {root}")
-        local_agents = detect_agents(root)
-        any_local = False
-        for agent, sdir in sorted(local_agents.items()):
-            if not sdir.is_dir():
-                continue
-            links = sorted(p for p in sdir.iterdir() if p.is_symlink())
-            if not links:
-                continue
-            any_local = True
-            agent_idle, agent_active = 0, 0
-            for link in links:
-                if link.exists():
-                    skill = find_skill(link.resolve())
-                    if skill:
-                        idle, active = estimate_tokens(skill)
-                        agent_idle += idle
-                        agent_active += active
-            print(f"\n  {agent} (~{agent_idle} idle / ~{agent_active} active tokens):")
-            for link in links:
-                broken = " [broken]" if not link.exists() else ""
-                print(f"    {link.name} -> {home_short(link.resolve())}{broken}")
-        if not any_local:
+        rows = _collect_installed_rows(root)
+        if not _print_installed_table("Project", rows):
             print("  No skills installed locally.")
     else:
-        print("\nNo project root found.")
+        print("\nNo project root found (run from a git repo to see local installs).")
 
-    print("\nGlobal:")
-    global_agents = detect_agents(Path.home())
-    any_global = False
-    for agent, sdir in sorted(global_agents.items()):
-        if not sdir.is_dir():
-            continue
-        links = sorted(p for p in sdir.iterdir() if p.is_symlink())
-        if not links:
-            continue
-        any_global = True
-        agent_idle, agent_active = 0, 0
-        for link in links:
-            if link.exists():
-                skill = find_skill(link.resolve())
-                if skill:
-                    idle, active = estimate_tokens(skill)
-                    agent_idle += idle
-                    agent_active += active
-        print(
-            f"\n  {agent} ({len(links)} skills, ~{agent_idle} idle / ~{agent_active} active tokens):"
-        )
-        for link in links:
-            broken = " [broken]" if not link.exists() else ""
-            print(f"    {link.name}{broken}")
-
-    if not any_global:
-        print("  No skills installed globally.")
+    rows = _collect_installed_rows(Path.home())
+    if not _print_installed_table("Global", rows):
+        print("\nGlobal:\n  No skills installed globally.")
 
     print()
     return 0
@@ -343,15 +370,15 @@ def cmd_list(args: argparse.Namespace) -> int:
             return 0
 
     w = max(max(len(s.name) for s in skills), 5)
-    print(f"\n{'SKILL':<{w}}  {'SOURCE':<8}  {'IDLE':>5}  {'ACTIVE':>6}  DESCRIPTION")
-    print(f"{'-' * w}  {'-' * 8}  {'-' * 5}  {'-' * 6}  {'-' * 44}")
+    print(f"\n{'SKILL':<{w}}  {'SOURCE':<8}  {'IDLE_TK':>7}  {'ACTIVE_TK':>9}  DESCRIPTION")
+    print(f"{'-' * w}  {'-' * 8}  {'-' * 7}  {'-' * 9}  {'-' * 44}")
 
     for s in sorted(skills, key=lambda s: s.name):
         desc = s.description or "(no description)"
-        if len(desc) > 48:
-            desc = desc[:45] + "..."
+        if len(desc) > 72:
+            desc = desc[:69] + "..."
         idle, active = estimate_tokens(s)
-        print(f"{s.name:<{w}}  {s.source:<8}  {idle:>5}  {active:>6}  {desc}")
+        print(f"{s.name:<{w}}  {s.source:<8}  {idle:>7}  {active:>9}  {desc}")
 
     print(f"\nTotal: {len(skills)} skill(s)")
     return 0
@@ -378,6 +405,34 @@ def _repo_url(skill: Skill) -> str | None:
     return url
 
 
+def _find_installations(s: Skill) -> list[str]:
+    """Find where a skill is installed: returns list like ['global/claude-code', 'project/claude-code']."""
+    resolved = s.path.resolve()
+    installations: list[str] = []
+
+    root = find_project_root()
+    if root:
+        for agent, sdir in sorted(detect_agents(root).items()):
+            if not sdir.is_dir():
+                continue
+            for link in sdir.iterdir():
+                if link.is_symlink() and link.name not in IGNORED_DIRS:
+                    if link.resolve() == resolved:
+                        installations.append(f"project/{agent}")
+                        break
+
+    for agent, sdir in sorted(detect_agents(Path.home()).items()):
+        if not sdir.is_dir():
+            continue
+        for link in sdir.iterdir():
+            if link.is_symlink() and link.name not in IGNORED_DIRS:
+                if link.resolve() == resolved:
+                    installations.append(f"global/{agent}")
+                    break
+
+    return installations
+
+
 def _print_skill_detail(s: Skill) -> None:
     idle, active = estimate_tokens(s)
     url = _repo_url(s)
@@ -385,15 +440,27 @@ def _print_skill_detail(s: Skill) -> None:
     if url:
         m = re.search(r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?$", url)
         origin = m.group(1) if m else None
+    installations = _find_installations(s)
+    if installations:
+        by_scope: dict[str, list[str]] = {}
+        for inst in installations:
+            scope, agent = inst.split("/", 1)
+            by_scope.setdefault(scope, []).append(agent)
+        parts = [f"{scope}: {', '.join(agents)}" for scope, agents in by_scope.items()]
+        print(f"  Installed:   {' | '.join(parts)}")
+    else:
+        print(f"  Installed:   no")
     print(f"  Source:      {s.source}{f' ({origin})' if origin else ''}")
     if url:
         print(f"  Repo:        {url}")
-    print(f"  Description: {s.description or '(none)'}")
+    print(f"  Description: {s.description or '(no description)'}")
     print(f"  Tokens:      ~{idle} idle / ~{active} active")
     if s.helpers:
         print(f"  Helpers:     {', '.join(s.helpers)}")
-    print(f"  Path:        {home_short(s.path)}")
-    extra = {k: v for k, v in s.frontmatter.items() if k not in ("name", "description")}
+    print(f"  Path:        {_link(s.path)}")
+    extra = {
+        k: v for k, v in s.frontmatter.items() if k not in ("name", "description") and v
+    }
     if extra:
         print("  Frontmatter:")
         for k, v in extra.items():
@@ -401,36 +468,50 @@ def _print_skill_detail(s: Skill) -> None:
 
 
 def cmd_info(args: argparse.Namespace) -> int:
+    from_repo = getattr(args, "from_repo", None)
     all_matches = find_all_by_name(args.skill)
     if not all_matches:
         log.error(f"'{args.skill}' not found")
         return 1
 
+    # --from: show detail for a specific repo version
+    if from_repo:
+        filtered = [s for s in all_matches if library_repo_name(s) == from_repo]
+        if not filtered:
+            repos = [library_repo_name(s) or s.source for s in all_matches]
+            log.error(
+                f"'{args.skill}' not found in '{from_repo}'. Available in: {', '.join(repos)}"
+            )
+            return 1
+        print(f"\nName: {args.skill}")
+        print(f"\n  [{from_repo}]")
+        _print_skill_detail(filtered[0])
+        print()
+        return 0
+
+    # Pick the effective skill: installed locally > installed globally > dedup primary
     all_matches.sort(key=_skill_priority)
-    owned = [s for s in all_matches if s.source != "library"]
-    library = [s for s in all_matches if s.source == "library"]
+    effective = all_matches[0]
+    for s in all_matches:
+        insts = _find_installations(s)
+        if any(i.startswith("project/") for i in insts):
+            effective = s
+            break
+        if any(i.startswith("global/") for i in insts) and effective is all_matches[0]:
+            effective = s
+
+    others = [s for s in all_matches if s is not effective]
 
     print(f"\nName: {args.skill}")
+    print()
+    _print_skill_detail(effective)
 
-    if owned:
-        for s in owned:
-            print(f"\n  [active]")
-            _print_skill_detail(s)
-
-    if library:
-        others = library
-        if not owned:
-            s = library[0]
-            label = library_repo_origin(s) or library_repo_name(s) or home_short(s.path)
-            print(f"\n  [active] {label}")
-            _print_skill_detail(s)
-            others = library[1:]
-        if others:
-            print(f"\n  Also in library ({len(others)}):")
-            for s in others:
-                label = library_repo_origin(s) or library_repo_name(s) or home_short(s.path)
-                _, active = estimate_tokens(s)
-                print(f"    {label}: ~{active} active tokens")
+    if others:
+        print(f"\n  Also available ({len(others)}):")
+        for s in others:
+            label = library_repo_origin(s) or library_repo_name(s) or s.source
+            _, active = estimate_tokens(s)
+            print(f"    {label}: ~{active} active tokens")
 
     print()
     return 0
@@ -841,26 +922,32 @@ def cmd_router(args: argparse.Namespace) -> int:
 
 def cmd_doctor(_args: argparse.Namespace) -> int:
     issues: list[str] = []
+    dupes: dict[str, list[str]] = {}
 
-    # 1. Frontmatter checks + duplicates
+    # 1. Frontmatter checks + collect duplicates
     raw = scan_tree(SKILLS_DIR)
     seen_names: dict[str, Path] = {}
     skills: list[Skill] = []
     for s in raw:
         if s.name in seen_names:
-            issues.append(
-                f"duplicate name '{s.name}': {home_short(s.path)}"
-                f" conflicts with {home_short(seen_names[s.name])}"
-            )
+            repo = library_repo_name(s) or s.source
+            if s.name not in dupes:
+                first_repo = library_repo_name(
+                    next(x for x in raw if x.name == s.name and x.path == seen_names[s.name])
+                )
+                dupes[s.name] = [first_repo or "local"]
+            dupes[s.name].append(repo)
             continue
         seen_names[s.name] = s.path
         skills.append(s)
 
     for s in skills:
         if not s.frontmatter.get("name"):
-            issues.append(f"missing name in frontmatter: {home_short(s.path)}/SKILL.md")
+            repo = library_repo_name(s) or s.source
+            issues.append(f"missing name in frontmatter: {s.name} ({repo})")
         if not s.description:
-            issues.append(f"missing description: {home_short(s.path)}/SKILL.md")
+            repo = library_repo_name(s) or s.source
+            issues.append(f"missing description: {s.name} ({repo})")
 
     # 2. Broken symlinks in global agent dirs
     for agent, sdir in sorted(detect_agents(Path.home()).items()):
@@ -869,9 +956,8 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         for link in sorted(sdir.iterdir()):
             if link.is_symlink() and not link.exists():
                 issues.append(
-                    f"broken global symlink: {agent}/{link.name}"
-                    f" -> {home_short(link.resolve())}"
-                    f"\n    fix: skillm uninstall -g {link.name}"
+                    f"broken symlink: global/{agent}/{link.name}"
+                    f"  fix: skillm uninstall -g {link.name}"
                 )
 
     # 3. Broken symlinks in project
@@ -883,9 +969,8 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
             for link in sorted(sdir.iterdir()):
                 if link.is_symlink() and not link.exists():
                     issues.append(
-                        f"broken local symlink: {agent}/{link.name}"
-                        f" -> {home_short(link.resolve())}"
-                        f"\n    fix: skillm uninstall {link.name}"
+                        f"broken symlink: project/{agent}/{link.name}"
+                        f"  fix: skillm uninstall {link.name}"
                     )
 
     # 4. Library dirs with no skills
@@ -896,16 +981,22 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
             sub = scan_tree(d, max_depth=2)
             if not sub and not find_skill(d):
                 issues.append(
-                    f"library entry has no skills: library/{d.name}"
-                    f"\n    fix: skillm remove {d.name}"
+                    f"empty library repo: {d.name}"
+                    f"  fix: skillm remove {d.name}"
                 )
 
+    # Report
     if issues:
         print(f"\n{len(issues)} issue(s):\n")
         for issue in issues:
             print(f"  {issue}")
     else:
         print("\nNo issues found.")
+
+    if dupes:
+        print(f"\nDuplicates ({len(dupes)} names across repos, handled by dedup):\n")
+        for name, repos in sorted(dupes.items()):
+            print(f"  {name}: {', '.join(repos)}")
 
     print()
     return 1 if issues else 0
@@ -961,6 +1052,7 @@ Infrastructure:
 
     p_info = sub.add_parser("info", help="show skill details")
     p_info.add_argument("skill", help="skill name")
+    p_info.add_argument("--from", dest="from_repo", help="show specific library repo version")
 
     # Install / Uninstall
     p_install = sub.add_parser("install", aliases=["i"], help="install skills")
