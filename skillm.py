@@ -360,6 +360,13 @@ def cmd_list(args: argparse.Namespace) -> int:
         print("No skills found.")
         return 0
 
+    # Build duplicates map: name -> list of repo labels (excluding the winner)
+    raw = scan_tree(SKILLS_DIR)
+    dupes: dict[str, list[str]] = {}
+    for s in raw:
+        dupes.setdefault(s.name, []).append(library_repo_name(s) or s.source)
+    dupes = {name: repos[1:] for name, repos in dupes.items() if len(repos) > 1}
+
     if args.query:
         q = args.query.lower()
         skills = [
@@ -383,8 +390,11 @@ def cmd_list(args: argparse.Namespace) -> int:
             desc = desc[:69] + "..."
         idle, active = estimate_tokens(s)
         print(f"{s.name:<{w}}  {s.source:<8}  {idle:>7}  {active:>9}  {desc}")
+        if s.name in dupes:
+            print(f"  ↳ also in: {', '.join(dupes[s.name])}")
 
     print(f"\nTotal: {len(skills)} skill(s)")
+    print("  Install: skillm install <skill>    Info: skillm info <skill>")
     return 0
 
 

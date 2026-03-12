@@ -357,7 +357,9 @@ class TestScanAll:
         # pack2 has a longer SKILL.md so it wins
         p2 = sd / "pack2" / "dupe"
         p2.mkdir(parents=True)
-        (p2 / "SKILL.md").write_text('---\nname: dupe\ndescription: "longer"\n---\n' + "A" * 500)
+        (p2 / "SKILL.md").write_text(
+            '---\nname: dupe\ndescription: "longer"\n---\n' + "A" * 500
+        )
 
         result = skillm.scan_all()
         dupes = [s for s in result if s.name == "dupe"]
@@ -478,7 +480,9 @@ class TestFindProjectRoot:
 
 class TestCmdList:
     def test_empty(self, skills_env, capsys):
-        args = argparse.Namespace(command="list", query=None, installed=False, verbose=False)
+        args = argparse.Namespace(
+            command="list", query=None, installed=False, verbose=False
+        )
         ret = skillm.cmd_list(args)
         assert ret == 0
         assert "No skills found" in capsys.readouterr().out
@@ -488,7 +492,9 @@ class TestCmdList:
         make_skill(sd / "alpha", name="alpha", description="Alpha skill")
         make_skill(sd / "beta", name="beta", description="Beta skill")
 
-        args = argparse.Namespace(command="list", query=None, installed=False, verbose=False)
+        args = argparse.Namespace(
+            command="list", query=None, installed=False, verbose=False
+        )
         ret = skillm.cmd_list(args)
         assert ret == 0
         out = capsys.readouterr().out
@@ -500,7 +506,9 @@ class TestCmdList:
         sd = skills_env["skills_dir"]
         make_skill(sd / "alpha", name="alpha", description="Alpha skill")
 
-        args = argparse.Namespace(command="list", query=None, installed=False, verbose=False)
+        args = argparse.Namespace(
+            command="list", query=None, installed=False, verbose=False
+        )
         skillm.cmd_list(args)
         out = capsys.readouterr().out
         assert "idle" not in out.split("Total:")[1]
@@ -511,7 +519,9 @@ class TestCmdList:
         make_skill(sd / "alpha", name="alpha", description="Alpha skill")
         make_skill(sd / "beta", name="beta", description="Beta skill")
 
-        args = argparse.Namespace(command="list", query="alpha", installed=False, verbose=False)
+        args = argparse.Namespace(
+            command="list", query="alpha", installed=False, verbose=False
+        )
         ret = skillm.cmd_list(args)
         assert ret == 0
         out = capsys.readouterr().out
@@ -523,7 +533,9 @@ class TestCmdList:
         sd = skills_env["skills_dir"]
         make_skill(sd / "x", name="x", description="Uses tailwind CSS")
 
-        args = argparse.Namespace(command="list", query="tailwind", installed=False, verbose=False)
+        args = argparse.Namespace(
+            command="list", query="tailwind", installed=False, verbose=False
+        )
         skillm.cmd_list(args)
         out = capsys.readouterr().out
         assert "x" in out
@@ -533,7 +545,9 @@ class TestCmdList:
         sd = skills_env["skills_dir"]
         make_skill(sd / "alpha", name="alpha", description="Alpha skill")
 
-        args = argparse.Namespace(command="list", query="zzz", installed=False, verbose=False)
+        args = argparse.Namespace(
+            command="list", query="zzz", installed=False, verbose=False
+        )
         ret = skillm.cmd_list(args)
         assert ret == 0
         assert "No skills matching" in capsys.readouterr().out
@@ -542,16 +556,33 @@ class TestCmdList:
         sd = skills_env["skills_dir"]
         make_skill(sd / "x", name="x", description="A" * 100)
 
-        args = argparse.Namespace(command="list", query=None, installed=False, verbose=False)
+        args = argparse.Namespace(
+            command="list", query=None, installed=False, verbose=False
+        )
         skillm.cmd_list(args)
         out = capsys.readouterr().out
         assert "..." in out
+
+    def test_duplicates_shown_with_also_in(self, skills_env, capsys):
+        sd = skills_env["skills_dir"]
+        make_skill(sd / "pack1" / "dupe", name="dupe", description="first version")
+        make_skill(sd / "pack2" / "dupe", name="dupe", description="second version")
+
+        args = argparse.Namespace(
+            command="list", query=None, installed=False, verbose=False
+        )
+        skillm.cmd_list(args)
+        out = capsys.readouterr().out
+        assert "dupe" in out
+        assert "also in:" in out
 
     def test_query_case_insensitive(self, skills_env, capsys):
         sd = skills_env["skills_dir"]
         make_skill(sd / "TailWind", name="TailWind", description="CSS framework")
 
-        args = argparse.Namespace(command="list", query="tailwind", installed=False, verbose=False)
+        args = argparse.Namespace(
+            command="list", query="tailwind", installed=False, verbose=False
+        )
         skillm.cmd_list(args)
         assert "TailWind" in capsys.readouterr().out
 
@@ -568,7 +599,9 @@ class TestCmdList:
             patch.object(skillm, "find_project_root", return_value=None),
             patch("pathlib.Path.home", return_value=home),
         ):
-            args = argparse.Namespace(command="list", query=None, installed=True, verbose=False)
+            args = argparse.Namespace(
+                command="list", query=None, installed=True, verbose=False
+            )
             ret = skillm.cmd_list(args)
 
         assert ret == 0
@@ -595,7 +628,9 @@ class TestCmdList:
             patch.object(skillm, "find_project_root", return_value=project),
             patch("pathlib.Path.home", return_value=home),
         ):
-            args = argparse.Namespace(command="list", query=None, installed=True, verbose=False)
+            args = argparse.Namespace(
+                command="list", query=None, installed=True, verbose=False
+            )
             ret = skillm.cmd_list(args)
 
         assert ret == 0
@@ -617,7 +652,9 @@ class TestCmdList:
             patch.object(skillm, "find_project_root", return_value=project),
             patch("pathlib.Path.home", return_value=home),
         ):
-            args = argparse.Namespace(command="list", query=None, installed=True, verbose=False)
+            args = argparse.Namespace(
+                command="list", query=None, installed=True, verbose=False
+            )
             skillm.cmd_list(args)
 
         out = capsys.readouterr().out
@@ -697,7 +734,9 @@ class TestCmdInfo:
             extras={"license": "MIT"},
         )
 
-        args = argparse.Namespace(command="info", skill="my-skill", from_repo=None, verbose=False)
+        args = argparse.Namespace(
+            command="info", skill="my-skill", from_repo=None, verbose=False
+        )
         ret = skillm.cmd_info(args)
         assert ret == 0
         out = capsys.readouterr().out
@@ -708,7 +747,9 @@ class TestCmdInfo:
         assert "Installed:" in out
 
     def test_not_found(self, skills_env):
-        args = argparse.Namespace(command="info", skill="nope", from_repo=None, verbose=False)
+        args = argparse.Namespace(
+            command="info", skill="nope", from_repo=None, verbose=False
+        )
         assert skillm.cmd_info(args) == 1
 
     def test_with_helpers(self, skills_env, capsys):
@@ -717,7 +758,9 @@ class TestCmdInfo:
         (s / "scripts").mkdir()
         (s / "assets").mkdir()
 
-        args = argparse.Namespace(command="info", skill="h", from_repo=None, verbose=False)
+        args = argparse.Namespace(
+            command="info", skill="h", from_repo=None, verbose=False
+        )
         skillm.cmd_info(args)
         out = capsys.readouterr().out
         assert "assets" in out
@@ -727,7 +770,9 @@ class TestCmdInfo:
         sd = skills_env["skills_dir"]
         make_skill(sd / "loc", name="loc", description="local skill")
 
-        args = argparse.Namespace(command="info", skill="loc", from_repo=None, verbose=False)
+        args = argparse.Namespace(
+            command="info", skill="loc", from_repo=None, verbose=False
+        )
         skillm.cmd_info(args)
         out = capsys.readouterr().out
         assert "local" in out
@@ -740,7 +785,9 @@ class TestCmdInfo:
         long_path.mkdir(parents=True)
         (long_path / "SKILL.md").write_text("---\nname: x\n---\n" + "A" * 1000)
 
-        args = argparse.Namespace(command="info", skill="x", from_repo=None, verbose=False)
+        args = argparse.Namespace(
+            command="info", skill="x", from_repo=None, verbose=False
+        )
         ret = skillm.cmd_info(args)
         assert ret == 0
         out = capsys.readouterr().out
@@ -755,12 +802,13 @@ class TestCmdInfo:
         make_skill(sd / "x", name="x", description="owned version")
         make_skill(lib / "repo" / "x", name="x", description="library version")
 
-        args = argparse.Namespace(command="info", skill="x", from_repo=None, verbose=False)
+        args = argparse.Namespace(
+            command="info", skill="x", from_repo=None, verbose=False
+        )
         skillm.cmd_info(args)
         out = capsys.readouterr().out
         assert "Installed:" in out
         assert "Also available" in out
-
 
     def test_from_repo_shows_specific(self, skills_env, capsys):
         lib = skills_env["library_dir"]
@@ -768,7 +816,9 @@ class TestCmdInfo:
         make_skill(lib / "repo-a" / "x", name="x", description="version A")
         make_skill(lib / "repo-b" / "x", name="x", description="version B")
 
-        args = argparse.Namespace(command="info", skill="x", from_repo="repo-a", verbose=False)
+        args = argparse.Namespace(
+            command="info", skill="x", from_repo="repo-a", verbose=False
+        )
         ret = skillm.cmd_info(args)
         assert ret == 0
         out = capsys.readouterr().out
@@ -781,7 +831,9 @@ class TestCmdInfo:
         lib.mkdir(parents=True)
         make_skill(lib / "repo-a" / "x", name="x", description="version A")
 
-        args = argparse.Namespace(command="info", skill="x", from_repo="nope", verbose=False)
+        args = argparse.Namespace(
+            command="info", skill="x", from_repo="nope", verbose=False
+        )
         assert skillm.cmd_info(args) == 1
 
 
@@ -845,7 +897,12 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["my-skill"], is_global=False, force=False, from_repo=None, verbose=False
+            command="install",
+            skills=["my-skill"],
+            is_global=False,
+            force=False,
+            from_repo=None,
+            verbose=False,
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             ret = skillm.cmd_install(args)
@@ -862,7 +919,12 @@ class TestCmdInstall:
         (project / ".codex").mkdir()
 
         args = argparse.Namespace(
-            command="install", skills=["my-skill"], is_global=False, force=False, from_repo=None, verbose=False
+            command="install",
+            skills=["my-skill"],
+            is_global=False,
+            force=False,
+            from_repo=None,
+            verbose=False,
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             ret = skillm.cmd_install(args)
@@ -879,7 +941,12 @@ class TestCmdInstall:
         (home / ".codex").mkdir()
 
         args = argparse.Namespace(
-            command="install", skills=["my-skill"], is_global=True, force=False, from_repo=None, verbose=False
+            command="install",
+            skills=["my-skill"],
+            is_global=True,
+            force=False,
+            from_repo=None,
+            verbose=False,
         )
         with patch("pathlib.Path.home", return_value=home):
             ret = skillm.cmd_install(args)
@@ -892,7 +959,12 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["nope"], is_global=False, force=False, from_repo=None, verbose=False
+            command="install",
+            skills=["nope"],
+            is_global=False,
+            force=False,
+            from_repo=None,
+            verbose=False,
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             ret = skillm.cmd_install(args)
@@ -904,7 +976,12 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["good", "bad"], is_global=False, force=False, from_repo=None, verbose=False
+            command="install",
+            skills=["good", "bad"],
+            is_global=False,
+            force=False,
+            from_repo=None,
+            verbose=False,
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             ret = skillm.cmd_install(args)
@@ -916,7 +993,12 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["bad1", "bad2"], is_global=False, force=False, from_repo=None, verbose=False
+            command="install",
+            skills=["bad1", "bad2"],
+            is_global=False,
+            force=False,
+            from_repo=None,
+            verbose=False,
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             ret = skillm.cmd_install(args)
@@ -928,7 +1010,12 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["my-skill"], is_global=False, force=False, from_repo=None, verbose=False
+            command="install",
+            skills=["my-skill"],
+            is_global=False,
+            force=False,
+            from_repo=None,
+            verbose=False,
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             skillm.cmd_install(args)
@@ -939,7 +1026,12 @@ class TestCmdInstall:
 
     def test_no_project_root(self, skills_env):
         args = argparse.Namespace(
-            command="install", skills=["x"], is_global=False, force=False, from_repo=None, verbose=False
+            command="install",
+            skills=["x"],
+            is_global=False,
+            force=False,
+            from_repo=None,
+            verbose=False,
         )
         with patch.object(skillm, "find_project_root", return_value=None):
             assert skillm.cmd_install(args) == 1
@@ -953,7 +1045,12 @@ class TestCmdInstall:
         # No .claude/ or other agent dirs
 
         args = argparse.Namespace(
-            command="install", skills=["my-skill"], is_global=False, force=False, from_repo=None, verbose=False
+            command="install",
+            skills=["my-skill"],
+            is_global=False,
+            force=False,
+            from_repo=None,
+            verbose=False,
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             ret = skillm.cmd_install(args)
@@ -968,14 +1065,18 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["my-skill"], is_global=False, force=False, from_repo=None, verbose=False
+            command="install",
+            skills=["my-skill"],
+            is_global=False,
+            force=False,
+            from_repo=None,
+            verbose=False,
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             skillm.cmd_install(args)
 
         assert (project / ".claude" / "skills").is_dir()
         assert (project / ".claude" / "skills" / "my-skill").is_symlink()
-
 
     def test_scan_blocks_library_skill(self, skills_env, tmp_path):
         """Library skill with MEDIUM+ findings is blocked."""
@@ -984,11 +1085,18 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["risky"], is_global=False, force=False, from_repo=None, verbose=False
+            command="install",
+            skills=["risky"],
+            is_global=False,
+            force=False,
+            from_repo=None,
+            verbose=False,
         )
         with (
             patch.object(skillm, "find_project_root", return_value=project),
-            patch.object(skillm, "run_security_scan", return_value=(False, "MEDIUM issue")),
+            patch.object(
+                skillm, "run_security_scan", return_value=(False, "MEDIUM issue")
+            ),
         ):
             ret = skillm.cmd_install(args)
 
@@ -1002,7 +1110,12 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["safe"], is_global=False, force=False, from_repo=None, verbose=False
+            command="install",
+            skills=["safe"],
+            is_global=False,
+            force=False,
+            from_repo=None,
+            verbose=False,
         )
         with (
             patch.object(skillm, "find_project_root", return_value=project),
@@ -1020,7 +1133,12 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["risky"], is_global=False, force=True, from_repo=None, verbose=False
+            command="install",
+            skills=["risky"],
+            is_global=False,
+            force=True,
+            from_repo=None,
+            verbose=False,
         )
         with (
             patch.object(skillm, "find_project_root", return_value=project),
@@ -1039,7 +1157,12 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["local-skill"], is_global=False, force=False, from_repo=None, verbose=False
+            command="install",
+            skills=["local-skill"],
+            is_global=False,
+            force=False,
+            from_repo=None,
+            verbose=False,
         )
         with (
             patch.object(skillm, "find_project_root", return_value=project),
@@ -1060,7 +1183,12 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["dup"], is_global=False, force=False, from_repo=None, verbose=False
+            command="install",
+            skills=["dup"],
+            is_global=False,
+            force=False,
+            from_repo=None,
+            verbose=False,
         )
         with patch.object(skillm, "find_project_root", return_value=project):
             ret = skillm.cmd_install(args)
@@ -1077,7 +1205,12 @@ class TestCmdInstall:
         project = self._make_project(tmp_path)
 
         args = argparse.Namespace(
-            command="install", skills=["dup"], is_global=False, force=False, from_repo="repo-b", verbose=False
+            command="install",
+            skills=["dup"],
+            is_global=False,
+            force=False,
+            from_repo="repo-b",
+            verbose=False,
         )
         with (
             patch.object(skillm, "find_project_root", return_value=project),
@@ -1207,7 +1340,11 @@ class TestCmdScan:
 
     def test_skill_not_found(self, skills_env):
         args = argparse.Namespace(
-            command="scan", skill="nonexistent", all=False, format="markdown", verbose=False
+            command="scan",
+            skill="nonexistent",
+            all=False,
+            format="markdown",
+            verbose=False,
         )
         assert skillm.cmd_scan(args) == 1
 
