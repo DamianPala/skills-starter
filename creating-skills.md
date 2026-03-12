@@ -90,7 +90,7 @@ Find the **Goldilocks zone** — not too rigid (fragile if-else rules), not too 
 4. **Break into steps** — guide reasoning explicitly for complex tasks.
 5. **Structure with headers** — markdown sections or XML tags help organize.
 6. **Tool guidance is explicit** — if a human can't pick the right tool deterministically, the agent won't either.
-7. **Calm intensity** — Claude 4.5 responds well; skip "CRITICAL: YOU MUST", use "Use this when..."
+7. **Calm intensity** — modern models respond well to direct language; skip "CRITICAL: YOU MUST", use "Use this when..."
 
 **Behavioral nudges via XML tags:**
 - `<default_to_action>Implement rather than suggest.</default_to_action>`
@@ -405,12 +405,15 @@ Subagents don't have conversation context — if the skill works for a subagent,
 ## After Creating the Skill
 
 ```bash
-# Validate structure
-~/.agents/skills/skill-creator/scripts/quick_validate.py ~/.agents/skills/NAME
+# Check for issues (broken symlinks, missing frontmatter, etc.)
+skillm doctor
+
+# Security scan
+skillm scan NAME
 
 # Rebuild router
-python build-router.py
+skillm router
 
 # Check it's visible
-python build-router.py --list
+skillm list
 ```
