@@ -3,6 +3,7 @@
 
 # Whitelist template files
 !.gitignore
+!.bumpversion.toml
 !AGENTS.md
 !CLAUDE.md
 !README.md

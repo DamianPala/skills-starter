@@ -11,6 +11,8 @@ Infra:        router, doctor
 """
 # PYTHON_ARGCOMPLETE_OK
 
+__version__ = "0.1.0"
+
 import argparse
 import logging
 import re
@@ -1041,6 +1043,9 @@ Security:
 Infrastructure:
   router [--dry-run]        Rebuild skill router
   doctor                    Diagnose issues""",
+    )
+    parser.add_argument(
+        "-V", "--version", action="version", version=f"%(prog)s {__version__}"
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose output")
     parser.add_argument(
