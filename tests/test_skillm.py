@@ -574,7 +574,7 @@ class TestCmdList:
         skillm.cmd_list(args)
         out = capsys.readouterr().out
         assert "dupe" in out
-        assert "also in:" in out
+        assert "--from:" in out
 
     def test_query_case_insensitive(self, skills_env, capsys):
         sd = skills_env["skills_dir"]
