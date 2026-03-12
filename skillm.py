@@ -167,6 +167,18 @@ def library_repo_name(skill: Skill) -> str | None:
         return None
 
 
+def skill_repo_name(skill: Skill) -> str:
+    """Get the top-level folder name for any skill (library or local)."""
+    repo = library_repo_name(skill)
+    if repo:
+        return repo
+    try:
+        rel = skill.path.resolve().relative_to(SKILLS_DIR.resolve())
+        return rel.parts[0] if rel.parts else skill.name
+    except ValueError:
+        return skill.name
+
+
 def library_repo_origin(skill: Skill) -> str | None:
     """Get owner/repo shorthand from git remote of a library skill, or full URL."""
     url = _repo_url(skill)
@@ -364,7 +376,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     raw = scan_tree(SKILLS_DIR)
     dupes: dict[str, list[str]] = {}
     for s in raw:
-        dupes.setdefault(s.name, []).append(library_repo_name(s) or s.source)
+        dupes.setdefault(s.name, []).append(skill_repo_name(s))
     dupes = {name: repos for name, repos in dupes.items() if len(repos) > 1}
 
     if args.query:
@@ -485,9 +497,9 @@ def cmd_info(args: argparse.Namespace) -> int:
 
     # --from: show detail for a specific repo version
     if from_repo:
-        filtered = [s for s in all_matches if library_repo_name(s) == from_repo]
+        filtered = [s for s in all_matches if skill_repo_name(s) == from_repo]
         if not filtered:
-            repos = [library_repo_name(s) or s.source for s in all_matches]
+            repos = [skill_repo_name(s) for s in all_matches]
             log.error(
                 f"'{args.skill}' not found in '{from_repo}'. Available in: {', '.join(repos)}"
             )
@@ -518,7 +530,7 @@ def cmd_info(args: argparse.Namespace) -> int:
     if others:
         print(f"\n  Also available ({len(others)}):")
         for s in others:
-            label = library_repo_origin(s) or library_repo_name(s) or s.source
+            label = library_repo_origin(s) or skill_repo_name(s)
             _, active = estimate_tokens(s)
             print(f"    {label}: ~{active} active tokens")
 
@@ -564,13 +576,9 @@ def _resolve_skill(name: str, from_repo: str | None) -> Skill | None:
         return None
 
     if from_repo:
-        filtered = [
-            s
-            for s in all_matches
-            if library_repo_name(s) == from_repo or s.source != "library"
-        ]
+        filtered = [s for s in all_matches if skill_repo_name(s) == from_repo]
         if not filtered:
-            repos = [library_repo_name(s) or s.source for s in all_matches]
+            repos = [skill_repo_name(s) for s in all_matches]
             log.error(
                 f"  '{name}' not found in '{from_repo}'. Available in: {', '.join(repos)}"
             )
@@ -580,7 +588,7 @@ def _resolve_skill(name: str, from_repo: str | None) -> Skill | None:
     if len(all_matches) > 1:
         repos = []
         for s in sorted(all_matches, key=_skill_priority):
-            repo = library_repo_name(s) or s.source
+            repo = skill_repo_name(s)
             _, active = estimate_tokens(s)
             repos.append(f"    {repo}: ~{active} active tokens ({home_short(s.path)})")
         log.error(
@@ -942,7 +950,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     seen_names: dict[str, str] = {}  # name -> first repo label
     skills: list[Skill] = []
     for s in raw:
-        repo = library_repo_name(s) or s.source
+        repo = skill_repo_name(s)
         if s.name in seen_names:
             if s.name not in dupes:
                 dupes[s.name] = [seen_names[s.name]]
@@ -953,11 +961,11 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 
     for s in skills:
         if not s.frontmatter.get("name"):
-            repo = library_repo_name(s) or s.source
-            issues.append(f"missing name in frontmatter: {s.name} ({repo})")
+            issues.append(
+                f"missing name in frontmatter: {s.name} ({skill_repo_name(s)})"
+            )
         if not s.description:
-            repo = library_repo_name(s) or s.source
-            issues.append(f"missing description: {s.name} ({repo})")
+            issues.append(f"missing description: {s.name} ({skill_repo_name(s)})")
 
     # 2. Broken symlinks in all scopes
     scopes: list[tuple[str, Path, str]] = [("global", Path.home(), " -g")]
