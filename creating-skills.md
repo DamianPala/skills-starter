@@ -96,6 +96,49 @@ Find the **Goldilocks zone** — not too rigid (fragile if-else rules), not too 
 - `<default_to_action>Implement rather than suggest.</default_to_action>`
 - `<confirm_first>Confirm requirements before implementing.</confirm_first>`
 
+### Instruction Ordering (Sandwich Pattern)
+
+Where you place instructions matters as much as what they say. Models exhibit U-shaped attention: strong recall at the **beginning** (primacy) and **end** (recency), weak in the middle. Backed by "Lost in the Middle" (Liu et al., 2024), Google Research prompt repetition study (2025), all three vendor guides (Anthropic, OpenAI, Google), and Claude Code's own internal prompts.
+
+**Recommended SKILL.md structure:**
+
+```
+Frontmatter (name, description)
+├── Rules (5-8 hard constraints)        ← primacy slot
+├── Workflow (numbered steps)           ← self-reinforcing chain
+└── Constraints (2-3 critical repeated) ← recency slot
+```
+
+**Why it works:**
+- **Rules first** exploit primacy. Model sees constraints before any workflow
+- **Numbered workflow** in the middle is self-reinforcing: each step references the next, so the chain carries itself through the weak zone
+- **Repeated constraints at the end** exploit recency. Pick only 2-3 that are truly critical (e.g., "never force push", "no AI attribution trailers")
+
+**Practical tips:**
+- Max 5-8 rules before workflow. Beyond ~6 independent constraints, adherence drops (measured saturation ceiling)
+- Positive framing ("use X") beats negative ("don't use Y")
+- Structure (headers, XML tags) matters more than raw length
+- The repeated constraints at the end should be a subset, not a copy of the top rules
+
+**Example from commit skill:**
+```markdown
+## Rules                          ← top (primacy)
+- Never --no-verify, never force push...
+- One logical change per commit
+
+## Workflow                       ← middle (self-reinforcing)
+### Step 1: Assess and stage
+### Step 2: Analyze and generate
+### Step 3: Verify (grounding)
+### Step 4: Present for review
+### Step 5: Commit and confirm
+
+## Rules (bottom)                 ← end (recency) — same key rules repeated
+- Never --no-verify, never force push...
+```
+
+See also: `agent-design-handbook.md` (sections: Context window pressure, Anti-drift)
+
 ### Anti-Patterns to Avoid
 
 | Anti-Pattern | Problem | Fix |
