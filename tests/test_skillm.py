@@ -1,6 +1,7 @@
 """Tests for skillm.py."""
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -154,6 +155,97 @@ class TestClassifySource:
 
     def test_deep_path_is_local(self):
         assert skillm.classify_source("a/b/c") == ("local", "a/b/c")
+
+    def test_url_ending_with_md(self):
+        assert skillm.classify_source("https://example.com/skill/network.md") == (
+            "url",
+            "https://example.com/skill/network.md",
+        )
+
+    def test_url_without_md_is_git(self):
+        assert skillm.classify_source("https://example.com/repo") == (
+            "git",
+            "https://example.com/repo",
+        )
+
+
+class TestAddUrl:
+    @staticmethod
+    def _mock_curl(monkeypatch, content):
+        """Mock subprocess.run to simulate a successful curl download."""
+        import types
+
+        def fake_run(cmd, **kwargs):
+            return types.SimpleNamespace(returncode=0, stdout=content, stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+    def test_add_url_creates_skill(self, tmp_path, monkeypatch):
+        """Download a SKILL.md from URL and verify it's placed correctly."""
+        skill_content = "---\nname: test-url-skill\ndescription: A test skill\n---\n# Test\n"
+        monkeypatch.setattr(skillm, "SKILLS_DIR", tmp_path)
+        self._mock_curl(monkeypatch, skill_content)
+
+        rc = skillm._add_url("https://example-host.com/skills/test-url-skill.md")
+        assert rc == 0
+
+        target = tmp_path / "example-host-com" / "test-url-skill" / "SKILL.md"
+        assert target.exists()
+        assert target.read_text() == skill_content
+
+    def test_add_url_derives_name_from_filename(self, tmp_path, monkeypatch):
+        """When frontmatter has no name, derive from URL filename."""
+        skill_content = "---\ndescription: No name here\n---\n# Test\n"
+        monkeypatch.setattr(skillm, "SKILLS_DIR", tmp_path)
+        self._mock_curl(monkeypatch, skill_content)
+
+        rc = skillm._add_url("https://example.com/my-cool-skill.md")
+        assert rc == 0
+
+        target = tmp_path / "example-com" / "my-cool-skill" / "SKILL.md"
+        assert target.exists()
+
+    def test_add_url_fails_if_exists(self, tmp_path, monkeypatch):
+        """Existing skill without --force returns error."""
+        skill_content = "---\nname: existing\ndescription: Already here\n---\n"
+        monkeypatch.setattr(skillm, "SKILLS_DIR", tmp_path)
+
+        (tmp_path / "example-com" / "existing").mkdir(parents=True)
+        (tmp_path / "example-com" / "existing" / "SKILL.md").write_text("old")
+
+        self._mock_curl(monkeypatch, skill_content)
+
+        rc = skillm._add_url("https://example.com/existing.md", force=False)
+        assert rc == 1
+        assert (tmp_path / "example-com" / "existing" / "SKILL.md").read_text() == "old"
+
+    def test_add_url_force_overwrites(self, tmp_path, monkeypatch):
+        """With --force, existing skill is overwritten."""
+        new_content = "---\nname: existing\ndescription: Updated\n---\n"
+        monkeypatch.setattr(skillm, "SKILLS_DIR", tmp_path)
+
+        (tmp_path / "example-com" / "existing").mkdir(parents=True)
+        (tmp_path / "example-com" / "existing" / "SKILL.md").write_text("old")
+
+        self._mock_curl(monkeypatch, new_content)
+
+        rc = skillm._add_url("https://example.com/existing.md", force=True)
+        assert rc == 0
+        assert (tmp_path / "example-com" / "existing" / "SKILL.md").read_text() == new_content
+
+    def test_add_url_rejects_path_traversal(self, tmp_path, monkeypatch):
+        """Name with path traversal characters is sanitized."""
+        evil_content = "---\nname: ../../etc/evil\ndescription: Sneaky\n---\n"
+        monkeypatch.setattr(skillm, "SKILLS_DIR", tmp_path)
+        self._mock_curl(monkeypatch, evil_content)
+
+        rc = skillm._add_url("https://example.com/evil.md")
+        assert rc == 0
+        # Name is sanitized: slashes and dots stripped
+        assert not (tmp_path / ".." / ".." / "etc" / "evil").exists()
+        # Skill saved under sanitized name inside SKILLS_DIR
+        target = tmp_path / "example-com" / "etc-evil" / "SKILL.md"
+        assert target.exists()
 
 
 class TestRepoNameFromUrl:

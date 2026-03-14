@@ -20,6 +20,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 try:
     import argcomplete
@@ -248,12 +249,19 @@ def _link(p: Path) -> str:
 
 
 def classify_source(source: str) -> tuple[str, str]:
-    """Classify add source as git URL, GitHub shorthand, or local path."""
-    if "://" in source or source.endswith(".git"):
+    """Classify add source as git URL, GitHub shorthand, local path, or raw URL."""
+    if "://" in source:
+        if source.endswith(".md"):
+            return "url", source
+        if source.endswith(".git"):
+            return "git", source
+        # URL without .git or .md: assume git repo
         return "git", source
     if source.startswith(("/", ".", "~")):
         return "local", source
     if re.match(r"^[a-zA-Z0-9_-][a-zA-Z0-9_.-]*/[a-zA-Z0-9_-][a-zA-Z0-9_.-]*$", source):
+        if source.endswith(".git"):
+            return "git", source
         return "github", f"https://github.com/{source}.git"
     return "local", source
 
@@ -701,6 +709,8 @@ def cmd_add(args: argparse.Namespace) -> int:
         return _add_npx(args.source)
 
     source_type, url = classify_source(args.source)
+    if source_type == "url":
+        return _add_url(url, args.force)
     if source_type in ("git", "github"):
         return _add_git(url, args.force)
     return _add_local(args.source, args.force)
@@ -770,6 +780,67 @@ def _add_local(path_str: str, force: bool = False) -> int:
     LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
     link.symlink_to(source)
     log.info(f"Linked library/{name} -> {home_short(source)}")
+    return 0
+
+
+def _add_url(url: str, force: bool = False) -> int:
+    """Download a single SKILL.md from a URL and add to skills directory."""
+    log.info(f"Downloading {url}")
+    result = subprocess.run(
+        ["curl", "-fSL", url],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        log.error(f"Download failed: {url}{f' ({stderr})' if stderr else ''}")
+        return 1
+
+    content = result.stdout
+    fm = parse_frontmatter(content)
+    name = fm.get("name")
+    if not name:
+        # Derive name from URL filename without extension
+        name = url.rstrip("/").rsplit("/", 1)[-1]
+        if name.endswith(".md"):
+            name = name[:-3]
+        log.warning(f"No 'name' in frontmatter, using '{name}' from URL")
+
+    # Sanitize name to prevent path traversal
+    name = re.sub(r"[/\\]", "-", name).strip(".-")
+    if not name:
+        log.error("Could not determine a valid skill name from URL or frontmatter")
+        return 1
+
+    # Determine where to place it: use URL domain as folder name
+    domain = urlparse(url).netloc.replace(".", "-")
+    parent = SKILLS_DIR / domain
+    target = parent / name
+
+    # Final safety check: target must be inside SKILLS_DIR
+    if not target.resolve().is_relative_to(SKILLS_DIR.resolve()):
+        log.error(f"Refusing to write outside skills directory: {target}")
+        return 1
+
+    if target.exists():
+        if not force:
+            log.error(
+                f"'{name}' already exists at {home_short(target)}. Use --force to overwrite."
+            )
+            return 1
+        log.info(f"Overwriting existing '{name}'")
+
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "SKILL.md").write_text(content, encoding="utf-8")
+
+    skill = find_skill(target)
+    if skill:
+        log.info(
+            f"Added skill '{skill.name}': {skill.description or '(no description)'}"
+        )
+    else:
+        log.info(f"Saved to {home_short(target)}/SKILL.md")
+
     return 0
 
 
@@ -1100,8 +1171,11 @@ Infrastructure:
     sub.add_parser("status", aliases=["st"], help="alias for 'list --installed'")
 
     # Library
-    p_add = sub.add_parser("add", help="add skill repo to library")
-    p_add.add_argument("source", help="git URL, owner/repo, or local path")
+    p_add = sub.add_parser("add", help="add skill repo or single skill to library")
+    p_add.add_argument(
+        "source",
+        help="git URL, owner/repo, local path, or .md URL (single skill)",
+    )
     p_add.add_argument("--npx", action="store_true", help="delegate to npx skills add")
     p_add.add_argument("--force", action="store_true", help="overwrite existing")
 
