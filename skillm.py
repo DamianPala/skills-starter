@@ -15,9 +15,11 @@ __version__ = "0.1.0"
 
 import argparse
 import logging
+import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -28,13 +30,14 @@ except ImportError:
     argcomplete = None
 
 SKILLS_DIR: Path = Path.home() / ".agents" / "skills"
-LIBRARY_DIR: Path = SKILLS_DIR / "library"
+LIBRARY_DIR: Path = Path.home() / ".agents" / "_library"
 ROUTER_DIR: Path = SKILLS_DIR / "_router"
 ROUTER_FILE: Path = ROUTER_DIR / "SKILL.md"
 
 IGNORED_DIRS = {
     "_router",
     "_dev",
+    "_library",
     ".git",
     "__pycache__",
     "node_modules",
@@ -47,6 +50,7 @@ HELPER_DIRS = {"scripts", "references", "assets"}
 CHARS_PER_TOKEN = 4  # rough estimate for English text
 
 # Relative paths from a base dir (home for global, project root for local).
+# Used for project-level detection and as fallback for global detection.
 AGENT_CONFIGS: dict[str, Path] = {
     "claude-code": Path(".claude") / "skills",
     "codex": Path(".codex") / "skills",
@@ -56,7 +60,35 @@ AGENT_CONFIGS: dict[str, Path] = {
     "kiro": Path(".kiro") / "skills",
     "opencode": Path(".config") / "opencode" / "skills",
     "copilot": Path(".copilot") / "skills",
+    "goose": Path(".config") / "goose" / "skills",
+    "roo": Path(".roo") / "skills",
+    "augment": Path(".augment") / "skills",
 }
+
+
+def _agent_global_dir(agent: str) -> Path | None:
+    """Resolve global skills dir for an agent, respecting env var overrides."""
+    home = Path.home()
+    env_overrides: dict[str, str] = {
+        "claude-code": "CLAUDE_CONFIG_DIR",
+        "codex": "CODEX_HOME",
+    }
+    # Agents whose global path differs from project path
+    global_overrides: dict[str, Path] = {
+        "windsurf": home / ".codeium" / "windsurf" / "skills",
+    }
+    env_var = env_overrides.get(agent)
+    if env_var:
+        val = os.environ.get(env_var)
+        if val:
+            return Path(val) / "skills"
+    if agent in global_overrides:
+        return global_overrides[agent]
+    rel = AGENT_CONFIGS.get(agent)
+    if rel:
+        return home / rel
+    return None
+
 
 log = logging.getLogger(__name__)
 
@@ -142,7 +174,7 @@ def _skill_priority(skill: Skill) -> tuple[int, int]:
 
 
 def scan_all() -> list[Skill]:
-    raw = scan_tree(SKILLS_DIR)
+    raw = scan_tree(SKILLS_DIR) + scan_tree(LIBRARY_DIR)
     groups: dict[str, list[Skill]] = {}
     for s in raw:
         groups.setdefault(s.name, []).append(s)
@@ -158,7 +190,8 @@ def scan_all() -> list[Skill]:
 
 def find_all_by_name(name: str) -> list[Skill]:
     """Find all skills with given name across all sources (no dedup)."""
-    return [s for s in scan_tree(SKILLS_DIR) if s.name == name]
+    all_skills = scan_tree(SKILLS_DIR) + scan_tree(LIBRARY_DIR)
+    return [s for s in all_skills if s.name == name]
 
 
 def library_repo_name(skill: Skill) -> str | None:
@@ -206,25 +239,87 @@ def find_project_root() -> Path | None:
 
 
 def detect_agents(base: Path) -> dict[str, Path]:
-    """Detect agents with config dirs under base."""
+    """Detect agents with config dirs under base.
+
+    For global installs (base == home), respects env var overrides
+    like $CLAUDE_CONFIG_DIR and $CODEX_HOME.
+    """
     found: dict[str, Path] = {}
+    is_global = base == Path.home()
     for agent, rel_path in AGENT_CONFIGS.items():
-        config_root = base / rel_path.parent
-        if config_root.is_dir():
-            found[agent] = base / rel_path
+        if is_global:
+            skills_dir = _agent_global_dir(agent)
+            if skills_dir and skills_dir.parent.is_dir():
+                found[agent] = skills_dir
+        else:
+            config_root = base / rel_path.parent
+            if config_root.is_dir():
+                found[agent] = base / rel_path
     return found
 
 
-def symlink_skill(link: Path, target: Path) -> bool:
+def _create_link(link: Path, target: Path) -> None:
+    """Create a directory link: symlink on Unix, junction on Windows, copy as fallback."""
+    # Try symlink first (works everywhere if permissions allow)
+    try:
+        link.symlink_to(target, target_is_directory=True)
+        return
+    except OSError:
+        pass
+    # On Windows, fall back to NTFS junction (no admin required)
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                check=True,
+                capture_output=True,
+            )
+            return
+        except subprocess.CalledProcessError:
+            pass
+    # Fallback: copy directory (loses live-edit)
+    shutil.copytree(target, link)
+    log.warning(f"Copied (no symlink/junction support): {home_short(link)}")
+
+
+def _is_link(path: Path) -> bool:
+    """Check if path is a symlink or junction."""
+    if path.is_symlink():
+        return True
+    if sys.platform == "win32" and path.is_dir():
+        # Check for NTFS junction via reparse point attribute
+        import ctypes
+
+        FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
+        if attrs != -1 and attrs & FILE_ATTRIBUTE_REPARSE_POINT:
+            return True
+    return False
+
+
+def _remove_link(link: Path) -> None:
+    """Remove a symlink, junction, or copied directory."""
     if link.is_symlink():
+        link.unlink()
+    elif sys.platform == "win32" and _is_link(link):
+        # Junctions: rmdir removes the junction, not the target
+        subprocess.run(
+            ["cmd", "/c", "rmdir", str(link)], check=True, capture_output=True
+        )
+    elif link.is_dir():
+        shutil.rmtree(link)
+
+
+def symlink_skill(link: Path, target: Path) -> bool:
+    if _is_link(link):
         if link.resolve() == target:
             return False
-        link.unlink()
+        _remove_link(link)
     if link.exists():
-        log.warning(f"  {link} exists and is not a symlink, skipping")
+        log.warning(f"  {link} exists and is not a link, skipping")
         return False
     link.parent.mkdir(parents=True, exist_ok=True)
-    link.symlink_to(target)
+    _create_link(link, target)
     return True
 
 
@@ -309,7 +404,7 @@ def _collect_installed_rows(
         if not sdir.is_dir():
             continue
         links = sorted(
-            p for p in sdir.iterdir() if p.is_symlink() and p.name not in IGNORED_DIRS
+            p for p in sdir.iterdir() if _is_link(p) and p.name not in IGNORED_DIRS
         )
         for link in links:
             name = link.name
@@ -383,7 +478,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         return 0
 
     # Build duplicates map: name -> all repo labels
-    raw = scan_tree(SKILLS_DIR)
+    raw = scan_tree(SKILLS_DIR) + scan_tree(LIBRARY_DIR)
     dupes: dict[str, list[str]] = {}
     for s in raw:
         dupes.setdefault(s.name, []).append(skill_repo_name(s))
@@ -457,7 +552,7 @@ def _find_installations(s: Skill) -> list[str]:
             if not sdir.is_dir():
                 continue
             for link in sdir.iterdir():
-                if link.is_symlink() and link.name not in IGNORED_DIRS:
+                if _is_link(link) and link.name not in IGNORED_DIRS:
                     if link.resolve() == resolved:
                         installations.append(f"{scope}/{agent}")
                         break
@@ -655,7 +750,7 @@ def cmd_install(args: argparse.Namespace) -> int:
             if symlink_skill(link, target):
                 log.info(f"  {name}: {agent} installed")
                 total += 1
-            elif link.is_symlink() and link.resolve() == target:
+            elif _is_link(link) and link.resolve() == target:
                 log.info(f"  {name}: {agent} already installed")
 
     if total:
@@ -682,12 +777,12 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     for name in args.skills:
         for agent, sdir in sorted(agents.items()):
             link = sdir / name
-            if link.is_symlink():
-                link.unlink()
+            if _is_link(link):
+                _remove_link(link)
                 log.info(f"  {name}: {agent} removed")
                 total += 1
             elif link.exists():
-                log.warning(f"  {name}: {agent} not a symlink, skipping")
+                log.warning(f"  {name}: {agent} not a link, skipping")
 
     if total:
         log.info(f"Removed {total} symlink(s) {scope_label}")
@@ -766,20 +861,19 @@ def _add_local(path_str: str, force: bool = False) -> int:
         return 1
 
     name = source.name
-    link = LIBRARY_DIR / name
+    link = SKILLS_DIR / name
 
-    if link.exists() or link.is_symlink():
+    if link.exists() or _is_link(link):
         if not force:
-            log.error(f"'{name}' already exists in library/. Use --force to overwrite.")
+            log.error(
+                f"'{name}' already exists in {home_short(SKILLS_DIR)}/. Use --force to overwrite."
+            )
             return 1
-        if link.is_symlink():
-            link.unlink()
-        else:
-            shutil.rmtree(link)
+        _remove_link(link)
 
-    LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
-    link.symlink_to(source)
-    log.info(f"Linked library/{name} -> {home_short(source)}")
+    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    _create_link(link, source)
+    log.info(f"Linked {name} -> {home_short(source)}")
     return 0
 
 
@@ -845,10 +939,21 @@ def _add_url(url: str, force: bool = False) -> int:
 
 
 def cmd_remove(args: argparse.Namespace) -> int:
-    target = LIBRARY_DIR / args.name
-    if not target.exists() and not target.is_symlink():
-        log.error(f"'{args.name}' not found in library/")
+    # Check both SKILLS_DIR and LIBRARY_DIR
+    target = SKILLS_DIR / args.name
+    location = "skills"
+    if not target.exists() and not _is_link(target):
+        target = LIBRARY_DIR / args.name
+        location = "library"
+    if not target.exists() and not _is_link(target):
+        log.error(f"'{args.name}' not found in skills/ or library/")
         return 1
+
+    # Linked skill repos in SKILLS_DIR: just remove the link
+    if location == "skills" and _is_link(target):
+        _remove_link(target)
+        log.info(f"Unlinked '{args.name}' from {home_short(SKILLS_DIR)}")
+        return 0
 
     # Warn if skills from this repo are installed somewhere
     if target.is_dir():
@@ -860,22 +965,22 @@ def cmd_remove(args: argparse.Namespace) -> int:
             resolved = s.path.resolve()
             for agent, sdir in global_agents.items():
                 link = sdir / s.name
-                if link.is_symlink() and link.resolve() == resolved:
+                if _is_link(link) and link.resolve() == resolved:
                     log.warning(f"  '{s.name}' is installed globally in {agent}")
             for agent, sdir in local_agents.items():
                 link = sdir / s.name
-                if link.is_symlink() and link.resolve() == resolved:
+                if _is_link(link) and link.resolve() == resolved:
                     log.warning(f"  '{s.name}' is installed locally in {agent}")
 
-    if not shutil.which("trash-put"):
-        log.error("trash-put not found. Install: pip install trash-cli")
-        return 1
-
-    result = subprocess.run(["trash-put", str(target)], check=False)
-    if result.returncode != 0:
-        log.error(f"trash-put failed for '{args.name}'")
-        return 1
-    log.info(f"Removed '{args.name}' from library")
+    if shutil.which("trash-put"):
+        result = subprocess.run(["trash-put", str(target)], check=False)
+        if result.returncode != 0:
+            log.error(f"trash-put failed for '{args.name}'")
+            return 1
+    else:
+        shutil.rmtree(target)
+        log.debug("trash-put not available, deleted permanently")
+    log.info(f"Removed '{args.name}' from {location}")
     return 0
 
 
@@ -1019,7 +1124,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     dupes: dict[str, list[str]] = {}
 
     # 1. Frontmatter checks + collect duplicates
-    raw = scan_tree(SKILLS_DIR)
+    raw = scan_tree(SKILLS_DIR) + scan_tree(LIBRARY_DIR)
     seen_names: dict[str, str] = {}  # name -> first repo label
     skills: list[Skill] = []
     for s in raw:
@@ -1050,9 +1155,9 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
             if not sdir.is_dir():
                 continue
             for link in sorted(sdir.iterdir()):
-                if link.is_symlink() and not link.exists():
+                if _is_link(link) and not link.exists():
                     issues.append(
-                        f"broken symlink: {scope}/{agent}/{link.name}"
+                        f"broken link: {scope}/{agent}/{link.name}"
                         f"  fix: skillm uninstall{flag} {link.name}"
                     )
 
@@ -1211,7 +1316,7 @@ Infrastructure:
     if args.skills_dir:
         global SKILLS_DIR, LIBRARY_DIR, ROUTER_DIR, ROUTER_FILE
         SKILLS_DIR = args.skills_dir.resolve()
-        LIBRARY_DIR = SKILLS_DIR / "library"
+        LIBRARY_DIR = SKILLS_DIR.parent / "_library"
         ROUTER_DIR = SKILLS_DIR / "_router"
         ROUTER_FILE = ROUTER_DIR / "SKILL.md"
 
