@@ -21,6 +21,9 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
+
+if sys.platform == "win32":
+    import ctypes
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -29,8 +32,9 @@ try:
 except ImportError:
     argcomplete = None
 
-SKILLS_DIR: Path = Path.home() / ".agents" / "skills"
-LIBRARY_DIR: Path = Path.home() / ".agents" / "_library"
+_HOME: Path = Path.home()
+SKILLS_DIR: Path = _HOME / ".agents" / "skills"
+LIBRARY_DIR: Path = _HOME / ".agents" / "_library"
 ROUTER_DIR: Path = SKILLS_DIR / "_router"
 ROUTER_FILE: Path = ROUTER_DIR / "SKILL.md"
 
@@ -65,28 +69,30 @@ AGENT_CONFIGS: dict[str, Path] = {
     "augment": Path(".augment") / "skills",
 }
 
+# Env vars that override the default global skills dir for specific agents.
+_AGENT_ENV_VARS: dict[str, str] = {
+    "claude-code": "CLAUDE_CONFIG_DIR",
+    "codex": "CODEX_HOME",
+}
+
+# Agents whose global path differs from project path (AGENT_CONFIGS).
+_AGENT_GLOBAL_OVERRIDES: dict[str, Path] = {
+    "windsurf": _HOME / ".codeium" / "windsurf" / "skills",
+}
+
 
 def _agent_global_dir(agent: str) -> Path | None:
     """Resolve global skills dir for an agent, respecting env var overrides."""
-    home = Path.home()
-    env_overrides: dict[str, str] = {
-        "claude-code": "CLAUDE_CONFIG_DIR",
-        "codex": "CODEX_HOME",
-    }
-    # Agents whose global path differs from project path
-    global_overrides: dict[str, Path] = {
-        "windsurf": home / ".codeium" / "windsurf" / "skills",
-    }
-    env_var = env_overrides.get(agent)
+    env_var = _AGENT_ENV_VARS.get(agent)
     if env_var:
         val = os.environ.get(env_var)
         if val:
             return Path(val) / "skills"
-    if agent in global_overrides:
-        return global_overrides[agent]
+    if agent in _AGENT_GLOBAL_OVERRIDES:
+        return _AGENT_GLOBAL_OVERRIDES[agent]
     rel = AGENT_CONFIGS.get(agent)
     if rel:
-        return home / rel
+        return _HOME / rel
     return None
 
 
@@ -173,8 +179,13 @@ def _skill_priority(skill: Skill) -> tuple[int, int]:
     return (source_rank, -size)
 
 
-def scan_all() -> list[Skill]:
-    raw = scan_tree(SKILLS_DIR) + scan_tree(LIBRARY_DIR)
+def _scan_all_raw() -> list[Skill]:
+    """Scan both SKILLS_DIR and LIBRARY_DIR, no dedup."""
+    return scan_tree(SKILLS_DIR) + scan_tree(LIBRARY_DIR)
+
+
+def _dedup_skills(raw: list[Skill]) -> list[Skill]:
+    """Deduplicate skills by name, keeping the highest-priority one."""
     groups: dict[str, list[Skill]] = {}
     for s in raw:
         groups.setdefault(s.name, []).append(s)
@@ -188,10 +199,13 @@ def scan_all() -> list[Skill]:
     return unique
 
 
+def scan_all() -> list[Skill]:
+    return _dedup_skills(_scan_all_raw())
+
+
 def find_all_by_name(name: str) -> list[Skill]:
     """Find all skills with given name across all sources (no dedup)."""
-    all_skills = scan_tree(SKILLS_DIR) + scan_tree(LIBRARY_DIR)
-    return [s for s in all_skills if s.name == name]
+    return [s for s in _scan_all_raw() if s.name == name]
 
 
 def library_repo_name(skill: Skill) -> str | None:
@@ -229,7 +243,7 @@ def library_repo_origin(skill: Skill) -> str | None:
 
 def find_project_root() -> Path | None:
     cwd = Path.cwd()
-    home = Path.home()
+    home = _HOME
     for parent in [cwd, *cwd.parents]:
         if parent == home:
             return None
@@ -245,7 +259,7 @@ def detect_agents(base: Path) -> dict[str, Path]:
     like $CLAUDE_CONFIG_DIR and $CODEX_HOME.
     """
     found: dict[str, Path] = {}
-    is_global = base == Path.home()
+    is_global = base == _HOME
     for agent, rel_path in AGENT_CONFIGS.items():
         if is_global:
             skills_dir = _agent_global_dir(agent)
@@ -288,8 +302,6 @@ def _is_link(path: Path) -> bool:
         return True
     if sys.platform == "win32" and path.is_dir():
         # Check for NTFS junction via reparse point attribute
-        import ctypes
-
         FILE_ATTRIBUTE_REPARSE_POINT = 0x400
         attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
         if attrs != -1 and attrs & FILE_ATTRIBUTE_REPARSE_POINT:
@@ -301,13 +313,19 @@ def _remove_link(link: Path) -> None:
     """Remove a symlink, junction, or copied directory."""
     if link.is_symlink():
         link.unlink()
-    elif sys.platform == "win32" and _is_link(link):
-        # Junctions: rmdir removes the junction, not the target
-        subprocess.run(
-            ["cmd", "/c", "rmdir", str(link)], check=True, capture_output=True
-        )
+    elif sys.platform == "win32" and link.is_dir():
+        # Check reparse point directly (junction) without re-calling _is_link
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(link))
+        if attrs != -1 and attrs & 0x400:
+            subprocess.run(
+                ["cmd", "/c", "rmdir", str(link)], check=True, capture_output=True
+            )
+        else:
+            shutil.rmtree(link)
     elif link.is_dir():
         shutil.rmtree(link)
+    elif link.is_file():
+        link.unlink()
 
 
 def symlink_skill(link: Path, target: Path) -> bool:
@@ -324,7 +342,7 @@ def symlink_skill(link: Path, target: Path) -> bool:
 
 
 def home_short(p: Path) -> str:
-    return str(p).replace(str(Path.home()), "~")
+    return str(p).replace(str(_HOME), "~")
 
 
 def _short_path(p: Path) -> str:
@@ -460,7 +478,7 @@ def _list_installed() -> int:
     else:
         print("\nNo project root found (run from a git repo to see local installs).")
 
-    rows = _collect_installed_rows(Path.home())
+    rows = _collect_installed_rows(_HOME)
     if not _print_installed_table("Global", rows):
         print("\nGlobal:\n  No skills installed globally.")
 
@@ -472,13 +490,13 @@ def cmd_list(args: argparse.Namespace) -> int:
     if getattr(args, "installed", False):
         return _list_installed()
 
-    skills = scan_all()
+    raw = _scan_all_raw()
+    skills = _dedup_skills(raw)
     if not skills:
         print("No skills found.")
         return 0
 
     # Build duplicates map: name -> all repo labels
-    raw = scan_tree(SKILLS_DIR) + scan_tree(LIBRARY_DIR)
     dupes: dict[str, list[str]] = {}
     for s in raw:
         dupes.setdefault(s.name, []).append(skill_repo_name(s))
@@ -545,7 +563,7 @@ def _find_installations(s: Skill) -> list[str]:
     root = find_project_root()
     if root:
         scopes.append(("project", root))
-    scopes.append(("global", Path.home()))
+    scopes.append(("global", _HOME))
 
     for scope, base in scopes:
         for agent, sdir in sorted(detect_agents(base).items()):
@@ -707,7 +725,7 @@ def _resolve_skill(name: str, from_repo: str | None) -> Skill | None:
 
 def cmd_install(args: argparse.Namespace) -> int:
     if args.is_global:
-        agents = detect_agents(Path.home())
+        agents = detect_agents(_HOME)
         if not agents:
             log.error("No agents detected")
             return 1
@@ -760,7 +778,7 @@ def cmd_install(args: argparse.Namespace) -> int:
 
 def cmd_uninstall(args: argparse.Namespace) -> int:
     if args.is_global:
-        agents = detect_agents(Path.home())
+        agents = detect_agents(_HOME)
         if not agents:
             log.error("No agents detected")
             return 1
@@ -939,18 +957,17 @@ def _add_url(url: str, force: bool = False) -> int:
 
 
 def cmd_remove(args: argparse.Namespace) -> int:
-    # Check both SKILLS_DIR and LIBRARY_DIR
+    # Check SKILLS_DIR first, then LIBRARY_DIR
     target = SKILLS_DIR / args.name
-    location = "skills"
-    if not target.exists() and not _is_link(target):
+    in_skills = target.exists() or _is_link(target)
+    if not in_skills:
         target = LIBRARY_DIR / args.name
-        location = "library"
-    if not target.exists() and not _is_link(target):
-        log.error(f"'{args.name}' not found in skills/ or library/")
-        return 1
+        if not target.exists() and not _is_link(target):
+            log.error(f"'{args.name}' not found in skills/ or library/")
+            return 1
 
     # Linked skill repos in SKILLS_DIR: just remove the link
-    if location == "skills" and _is_link(target):
+    if in_skills and _is_link(target):
         _remove_link(target)
         log.info(f"Unlinked '{args.name}' from {home_short(SKILLS_DIR)}")
         return 0
@@ -958,7 +975,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
     # Warn if skills from this repo are installed somewhere
     if target.is_dir():
         repo_skills = scan_tree(target, max_depth=2)
-        global_agents = detect_agents(Path.home())
+        global_agents = detect_agents(_HOME)
         root = find_project_root()
         local_agents = detect_agents(root) if root else {}
         for s in repo_skills:
@@ -980,7 +997,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
     else:
         shutil.rmtree(target)
         log.debug("trash-put not available, deleted permanently")
-    log.info(f"Removed '{args.name}' from {location}")
+    log.info(f"Removed '{args.name}' from {'skills' if in_skills else 'library'}")
     return 0
 
 
@@ -1124,7 +1141,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
     dupes: dict[str, list[str]] = {}
 
     # 1. Frontmatter checks + collect duplicates
-    raw = scan_tree(SKILLS_DIR) + scan_tree(LIBRARY_DIR)
+    raw = _scan_all_raw()
     seen_names: dict[str, str] = {}  # name -> first repo label
     skills: list[Skill] = []
     for s in raw:
@@ -1146,7 +1163,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
             issues.append(f"missing description: {s.name} ({skill_repo_name(s)})")
 
     # 2. Broken symlinks in all scopes
-    scopes: list[tuple[str, Path, str]] = [("global", Path.home(), " -g")]
+    scopes: list[tuple[str, Path, str]] = [("global", _HOME, " -g")]
     root = find_project_root()
     if root:
         scopes.append(("project", root, ""))
