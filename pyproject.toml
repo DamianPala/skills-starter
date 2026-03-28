@@ -1,0 +1,8 @@
+[project]
+name = "skillm"
+version = "0.1.0"
+description = "Skill manager for AI coding agents"
+requires-python = ">=3.12"
+
+[project.scripts]
+skillm = "skillm:main"

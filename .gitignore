@@ -4,6 +4,7 @@
 # Whitelist template files
 !.gitignore
 !.bumpversion.toml
+!pyproject.toml
 !pyrightconfig.json
 !AGENTS.md
 !CLAUDE.md
